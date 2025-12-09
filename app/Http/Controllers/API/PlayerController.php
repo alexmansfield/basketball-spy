@@ -6,9 +6,14 @@ use App\Http\Controllers\Controller;
 use App\Models\Player;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Cache;
 
 class PlayerController extends Controller
 {
+    /**
+     * Cache TTL in seconds (15 minutes for players - roster changes occasionally)
+     */
+    private const CACHE_TTL = 900;
     /**
      * Display a listing of players.
      *
@@ -23,33 +28,43 @@ class PlayerController extends Controller
     {
         $teamId = $request->input('team_id');
         $search = $request->input('search');
-        $sort = $request->input('sort', 'jersey'); // Default to jersey sorting
+        $sort = $request->input('sort', 'jersey');
 
+        // Build cache key - only cache team-specific requests (most common case)
+        if ($teamId) {
+            $cacheKey = "players:team:{$teamId}:{$sort}:" . md5($search ?? '');
+
+            $players = Cache::remember($cacheKey, self::CACHE_TTL, function () use ($teamId, $search, $sort) {
+                if ($sort === 'minutes') {
+                    return $this->getPlayersRankedByMinutes($teamId, $search)->toArray();
+                }
+                return $this->getPlayersSortedByJersey($teamId, $search)->toArray();
+            });
+
+            return response()->json($players);
+        }
+
+        // Non-team-specific requests - paginated, not cached (less common)
         if ($sort === 'minutes') {
             $players = $this->getPlayersRankedByMinutes($teamId, $search);
         } else {
             $players = $this->getPlayersSortedByJersey($teamId, $search);
         }
 
-        // Apply pagination if no team_id specified
-        if (!$teamId) {
-            $perPage = $request->get('per_page', 20);
-            $page = $request->get('page', 1);
-            $offset = ($page - 1) * $perPage;
+        $perPage = $request->get('per_page', 20);
+        $page = $request->get('page', 1);
+        $offset = ($page - 1) * $perPage;
 
-            $total = $players->count();
-            $paginatedPlayers = $players->slice($offset, $perPage)->values();
+        $total = $players->count();
+        $paginatedPlayers = $players->slice($offset, $perPage)->values();
 
-            return response()->json([
-                'data' => $paginatedPlayers,
-                'current_page' => (int) $page,
-                'per_page' => (int) $perPage,
-                'total' => $total,
-                'last_page' => (int) ceil($total / $perPage),
-            ]);
-        }
-
-        return response()->json($players);
+        return response()->json([
+            'data' => $paginatedPlayers,
+            'current_page' => (int) $page,
+            'per_page' => (int) $perPage,
+            'total' => $total,
+            'last_page' => (int) ceil($total / $perPage),
+        ]);
     }
 
     /**

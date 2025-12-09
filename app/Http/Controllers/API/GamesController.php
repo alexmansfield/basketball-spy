@@ -6,9 +6,15 @@ use App\Http\Controllers\Controller;
 use App\Models\Game;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 
 class GamesController extends Controller
 {
+    /**
+     * Cache TTL in seconds (5 minutes for games - updates frequently during game day)
+     */
+    private const CACHE_TTL = 300;
+
     /**
      * Get today's games.
      *
@@ -16,17 +22,24 @@ class GamesController extends Controller
      */
     public function today(Request $request): JsonResponse
     {
-        $games = Game::with(['homeTeam', 'awayTeam'])
-            ->today()
-            ->orderBy('scheduled_at')
-            ->get();
+        $date = now()->toDateString();
+        $cacheKey = "games:today:{$date}";
 
-        return response()->json([
-            'games' => $games->map(function ($game) {
-                return $this->formatGame($game);
-            }),
-            'date' => now()->toDateString(),
-        ]);
+        $data = Cache::remember($cacheKey, self::CACHE_TTL, function () use ($date) {
+            $games = Game::with(['homeTeam', 'awayTeam'])
+                ->today()
+                ->orderBy('scheduled_at')
+                ->get();
+
+            return [
+                'games' => $games->map(function ($game) {
+                    return $this->formatGame($game);
+                })->toArray(),
+                'date' => $date,
+            ];
+        });
+
+        return response()->json($data);
     }
 
     /**
@@ -36,17 +49,23 @@ class GamesController extends Controller
      */
     public function byDate(string $date, Request $request): JsonResponse
     {
-        $games = Game::with(['homeTeam', 'awayTeam'])
-            ->forDate($date)
-            ->orderBy('scheduled_at')
-            ->get();
+        $cacheKey = "games:date:{$date}";
 
-        return response()->json([
-            'games' => $games->map(function ($game) {
-                return $this->formatGame($game);
-            }),
-            'date' => $date,
-        ]);
+        $data = Cache::remember($cacheKey, self::CACHE_TTL, function () use ($date) {
+            $games = Game::with(['homeTeam', 'awayTeam'])
+                ->forDate($date)
+                ->orderBy('scheduled_at')
+                ->get();
+
+            return [
+                'games' => $games->map(function ($game) {
+                    return $this->formatGame($game);
+                })->toArray(),
+                'date' => $date,
+            ];
+        });
+
+        return response()->json($data);
     }
 
     /**

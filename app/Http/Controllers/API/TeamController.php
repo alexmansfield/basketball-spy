@@ -6,9 +6,15 @@ use App\Http\Controllers\Controller;
 use App\Models\Team;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Cache;
 
 class TeamController extends Controller
 {
+    /**
+     * Cache TTL in seconds (1 hour for teams - changes infrequently)
+     */
+    private const CACHE_TTL = 3600;
+
     /**
      * Display a listing of teams.
      *
@@ -19,45 +25,54 @@ class TeamController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = Team::query();
+        // Build cache key based on filters
+        $league = $request->input('league', 'all');
+        $search = $request->input('search', '');
+        $cacheKey = "teams:index:{$league}:" . md5($search);
 
-        // Filter by league (NBA, WNBA, Foreign)
-        if ($request->has('league')) {
-            $query->where('league', $request->league);
-        }
+        $data = Cache::remember($cacheKey, self::CACHE_TTL, function () use ($request) {
+            $query = Team::query();
 
-        // Search by team name (case-insensitive)
-        if ($request->has('search')) {
-            $search = $request->search;
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%")
-                  ->orWhere('abbreviation', 'like', "%{$search}%")
-                  ->orWhere('location', 'like', "%{$search}%")
-                  ->orWhere('nickname', 'like', "%{$search}%");
-            });
-        }
+            // Filter by league (NBA, WNBA, Foreign)
+            if ($request->has('league')) {
+                $query->where('league', $request->league);
+            }
 
-        // Order by league and name
-        $query->orderBy('league')->orderBy('name');
+            // Search by team name (case-insensitive)
+            if ($request->has('search')) {
+                $search = $request->search;
+                $query->where(function ($q) use ($search) {
+                    $q->where('name', 'like', "%{$search}%")
+                      ->orWhere('abbreviation', 'like', "%{$search}%")
+                      ->orWhere('location', 'like', "%{$search}%")
+                      ->orWhere('nickname', 'like', "%{$search}%");
+                });
+            }
 
-        // Get all teams (mobile app fetches all at once for local filtering)
-        $teams = $query->get();
+            // Order by league and name
+            $query->orderBy('league')->orderBy('name');
 
-        // Return in format expected by mobile app
-        return response()->json([
-            'teams' => $teams->map(function ($team) {
-                return [
-                    'id' => (string) $team->id,
-                    'name' => $team->name,
-                    'abbreviation' => $team->abbreviation,
-                    'location' => $team->location,
-                    'nickname' => $team->nickname,
-                    'league' => $team->league,
-                    'logoUrl' => $team->logo_url,
-                    'color' => $team->color,
-                ];
-            }),
-        ]);
+            // Get all teams (mobile app fetches all at once for local filtering)
+            $teams = $query->get();
+
+            // Return in format expected by mobile app
+            return [
+                'teams' => $teams->map(function ($team) {
+                    return [
+                        'id' => (string) $team->id,
+                        'name' => $team->name,
+                        'abbreviation' => $team->abbreviation,
+                        'location' => $team->location,
+                        'nickname' => $team->nickname,
+                        'league' => $team->league,
+                        'logoUrl' => $team->logo_url,
+                        'color' => $team->color,
+                    ];
+                })->toArray(),
+            ];
+        });
+
+        return response()->json($data);
     }
 
     /**
