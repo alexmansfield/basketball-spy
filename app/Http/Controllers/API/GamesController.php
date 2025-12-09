@@ -82,6 +82,8 @@ class GamesController extends Controller
                 'debug' => [
                     'total_games_in_db' => Game::count(),
                     'games_for_date' => $games->count(),
+                    'api_error' => request()->attributes->get('api_error'),
+                    'api_response' => request()->attributes->get('api_response'),
                 ],
             ];
         });
@@ -98,24 +100,36 @@ class GamesController extends Controller
 
         if (empty($apiKey)) {
             Log::warning('GamesController: SPORTSBLAZE_API_KEY not configured, returning empty games');
+            // Store the error for debug output
+            request()->attributes->set('api_error', 'SPORTSBLAZE_API_KEY not configured');
             return Game::query()->where('id', 0)->get(); // Empty collection
         }
 
         try {
-            $response = Http::timeout(10)->get(
-                "https://api.sportsblaze.com/nba/v1/games/{$date}/schedule.json",
-                ['key' => $apiKey]
-            );
+            $url = "https://api.sportsblaze.com/nba/v1/games/{$date}/schedule.json";
+            Log::info('GamesController: Fetching from SportsBlaze', ['url' => $url]);
+
+            $response = Http::timeout(10)->get($url, ['key' => $apiKey]);
 
             if (!$response->successful()) {
                 Log::error('GamesController: SportsBlaze API request failed', [
                     'status' => $response->status(),
+                    'body' => $response->body(),
                     'date' => $date,
                 ]);
+                request()->attributes->set('api_error', "API returned status {$response->status()}: {$response->body()}");
                 return Game::query()->where('id', 0)->get();
             }
 
             $data = $response->json();
+            Log::info('GamesController: SportsBlaze response', [
+                'games_count' => count($data['games'] ?? []),
+            ]);
+
+            request()->attributes->set('api_response', [
+                'games_in_response' => count($data['games'] ?? []),
+            ]);
+
             $this->storeGamesFromApi($data, $date);
 
             // Re-fetch from database with relationships
@@ -129,6 +143,7 @@ class GamesController extends Controller
                 'message' => $e->getMessage(),
                 'date' => $date,
             ]);
+            request()->attributes->set('api_error', "Exception: {$e->getMessage()}");
             return Game::query()->where('id', 0)->get();
         }
     }
