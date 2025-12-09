@@ -23,22 +23,18 @@ use App\Http\Controllers\API\GamesController;
 Route::post('/login', [AuthController::class, 'login']);
 Route::post('/register', [AuthController::class, 'register']);
 
+// Public data routes (no auth required for browsing games/teams/players)
+Route::get('/games/today', [GamesController::class, 'today']);
+Route::get('/games/{date}', [GamesController::class, 'byDate']);
+Route::apiResource('teams', TeamController::class)->only(['index', 'show']);
+Route::apiResource('players', PlayerController::class)->only(['index', 'show']);
+
 // Protected routes (require authentication)
 Route::middleware('auth:sanctum')->group(function () {
 
     // Auth routes
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/user', [AuthController::class, 'user']);
-
-    // Games
-    Route::get('/games/today', [GamesController::class, 'today']);
-    Route::get('/games/{date}', [GamesController::class, 'byDate']);
-
-    // Teams (public within auth)
-    Route::apiResource('teams', TeamController::class)->only(['index', 'show']);
-
-    // Players (public within auth)
-    Route::apiResource('players', PlayerController::class)->only(['index', 'show']);
 
     // Reports (organization-scoped)
     Route::apiResource('reports', ReportController::class);
