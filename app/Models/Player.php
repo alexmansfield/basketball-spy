@@ -25,6 +25,7 @@ class Player extends Model
         'stats_synced_at',
         'extra_attributes',
         'balldontlie_id',
+        'nba_player_id',
     ];
 
     protected $casts = [
