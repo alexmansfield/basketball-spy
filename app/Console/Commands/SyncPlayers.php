@@ -2,7 +2,6 @@
 
 namespace App\Console\Commands;
 
-use App\Jobs\SyncPlayersFromBallDontLie;
 use App\Models\Player;
 use App\Models\Team;
 use App\Services\BallDontLieService;
@@ -10,16 +9,13 @@ use Illuminate\Console\Command;
 
 class SyncPlayers extends Command
 {
-    protected $signature = 'app:sync-players
-                            {--queue : Dispatch job to queue instead of running synchronously}';
+    protected $signature = 'app:sync-players';
 
-    protected $description = 'Sync NBA players from BallDontLie API';
+    protected $description = 'Sync active NBA players from BallDontLie API';
 
     public function handle(BallDontLieService $api): int
     {
-        $useQueue = $this->option('queue');
-
-        $this->info('Syncing NBA players from BallDontLie API...');
+        $this->info('Syncing active NBA players from BallDontLie API...');
 
         // Check API key
         $apiKey = config('services.balldontlie.key');
@@ -40,23 +36,30 @@ class SyncPlayers extends Command
         }
         $this->info("✓ Found " . $teamsByBdlId->count() . " teams with BallDontLie IDs");
 
-        if ($useQueue) {
-            SyncPlayersFromBallDontLie::dispatch();
-            $this->info('Job dispatched to queue. Run `php artisan queue:work` to process.');
-            return Command::SUCCESS;
+        // Get only active players (single API call)
+        $this->info('Fetching active players from API...');
+        $activePlayers = $api->getActivePlayers();
+
+        if (empty($activePlayers)) {
+            $this->error('No active players returned from API');
+            return Command::FAILURE;
         }
 
-        $this->info('Running synchronously (this may take several minutes due to rate limiting)...');
-        $this->warn('Rate limit: 5 requests per minute. Please be patient.');
+        $this->info("✓ Fetched " . count($activePlayers) . " active players");
 
-        $stats = ['created' => 0, 'updated' => 0, 'skipped' => 0, 'total' => 0];
+        // Reset all players to inactive
+        Player::query()->update(['is_active' => false]);
 
-        foreach ($api->getAllPlayers() as $playerData) {
-            $stats['total']++;
+        $stats = ['created' => 0, 'updated' => 0, 'skipped' => 0];
+        $bar = $this->output->createProgressBar(count($activePlayers));
+        $bar->start();
+
+        foreach ($activePlayers as $playerData) {
             $bdlId = $playerData['id'] ?? null;
 
             if (!$bdlId) {
                 $stats['skipped']++;
+                $bar->advance();
                 continue;
             }
 
@@ -65,6 +68,7 @@ class SyncPlayers extends Command
 
             if (!$team) {
                 $stats['skipped']++;
+                $bar->advance();
                 continue;
             }
 
@@ -79,6 +83,7 @@ class SyncPlayers extends Command
                 'position' => $playerData['position'] ?? '',
                 'height' => $height,
                 'weight' => $weight,
+                'is_active' => true,
                 'extra_attributes' => [
                     'first_name' => $playerData['first_name'] ?? null,
                     'last_name' => $playerData['last_name'] ?? null,
@@ -100,15 +105,16 @@ class SyncPlayers extends Command
                 $stats['created']++;
             }
 
-            // Show progress every 50 players
-            if ($stats['total'] % 50 === 0) {
-                $this->line("  Processed {$stats['total']} players...");
-            }
+            $bar->advance();
         }
 
-        $this->newLine();
+        $bar->finish();
+        $this->newLine(2);
+
         $this->info("✓ Players synced: {$stats['created']} created, {$stats['updated']} updated, {$stats['skipped']} skipped");
-        $this->info("Total players in database: " . Player::count());
+
+        $activeCount = Player::where('is_active', true)->count();
+        $this->info("Active players in database: {$activeCount}");
 
         return Command::SUCCESS;
     }
