@@ -18,6 +18,14 @@ class Game extends Model
         'scheduled_at',
         'status',
         'external_id',
+        'balldontlie_id',
+        'home_team_score',
+        'away_team_score',
+        'period',
+        'time',
+        'postseason',
+        'season',
+        'extra_attributes',
     ];
 
     /**
@@ -29,6 +37,8 @@ class Game extends Model
         'scheduled_at' => 'datetime',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
+        'postseason' => 'boolean',
+        'extra_attributes' => 'array',
     ];
 
     /**

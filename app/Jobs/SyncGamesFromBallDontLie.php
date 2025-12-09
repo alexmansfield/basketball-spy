@@ -1,62 +1,61 @@
 <?php
 
-namespace App\Console\Commands;
+namespace App\Jobs;
 
-use App\Jobs\SyncGamesFromBallDontLie;
 use App\Models\Game;
 use App\Models\Team;
 use App\Services\BallDontLieService;
-use Illuminate\Console\Command;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 
-class SyncGames extends Command
+class SyncGamesFromBallDontLie implements ShouldQueue
 {
-    protected $signature = 'app:sync-games
-                            {--days=7 : Number of days to fetch (default: 7)}
-                            {--queue : Dispatch job to queue instead of running synchronously}';
+    use Queueable;
 
-    protected $description = 'Sync NBA games from BallDontLie API';
+    public int $tries = 3;
+    public int $backoff = 120;
+    public int $timeout = 600; // 10 minutes
 
-    public function handle(BallDontLieService $api): int
+    protected int $days;
+
+    /**
+     * Create a new job instance.
+     *
+     * @param int $days Number of days to fetch (forward and backward)
+     */
+    public function __construct(int $days = 7)
     {
-        $days = (int) $this->option('days');
-        $useQueue = $this->option('queue');
+        $this->days = $days;
+    }
 
-        $this->info("Syncing NBA games from BallDontLie API for the next {$days} days...");
+    /**
+     * Execute the job.
+     */
+    public function handle(BallDontLieService $api): void
+    {
+        Log::info('SyncGamesFromBallDontLie: Starting game sync', ['days' => $this->days]);
 
-        // Check API key
-        $apiKey = config('services.balldontlie.key');
-        if (empty($apiKey)) {
-            $this->error('BALL_DONT_LIE_API_KEY is not configured!');
-            return Command::FAILURE;
-        }
-        $this->info('✓ BALL_DONT_LIE_API_KEY is configured');
-
-        // Check for teams
+        // Build team lookup by BallDontLie ID
         $teamsByBdlId = Team::whereNotNull('balldontlie_id')
             ->get()
             ->keyBy('balldontlie_id');
 
         if ($teamsByBdlId->isEmpty()) {
-            $this->error('No teams with balldontlie_id found. Run `php artisan app:sync-teams` first.');
-            return Command::FAILURE;
+            Log::warning('SyncGamesFromBallDontLie: No teams with balldontlie_id found. Run SyncTeamsFromBallDontLie first.');
+            return;
         }
-        $this->info("✓ Found " . $teamsByBdlId->count() . " teams with BallDontLie IDs");
-
-        if ($useQueue) {
-            SyncGamesFromBallDontLie::dispatch($days);
-            $this->info('Job dispatched to queue. Run `php artisan queue:work` to process.');
-            return Command::SUCCESS;
-        }
-
-        $this->info('Running synchronously...');
 
         // Calculate date range
-        $startDate = now()->subDays(1)->format('Y-m-d');
-        $endDate = now()->addDays($days)->format('Y-m-d');
+        $startDate = now()->subDays(1)->format('Y-m-d'); // Include yesterday for final scores
+        $endDate = now()->addDays($this->days)->format('Y-m-d');
 
-        $this->info("Date range: {$startDate} to {$endDate}");
+        Log::info('SyncGamesFromBallDontLie: Fetching games', [
+            'start_date' => $startDate,
+            'end_date' => $endDate,
+        ]);
 
         $stats = ['created' => 0, 'updated' => 0, 'skipped' => 0, 'total' => 0];
         $processedDates = [];
@@ -70,6 +69,7 @@ class SyncGames extends Command
                 continue;
             }
 
+            // Get teams
             $homeTeamBdlId = $gameData['home_team']['id'] ?? null;
             $awayTeamBdlId = $gameData['visitor_team']['id'] ?? null;
 
@@ -77,14 +77,23 @@ class SyncGames extends Command
             $awayTeam = $awayTeamBdlId ? $teamsByBdlId->get($awayTeamBdlId) : null;
 
             if (!$homeTeam || !$awayTeam) {
+                Log::debug('SyncGamesFromBallDontLie: Game has unknown teams', [
+                    'game_id' => $bdlId,
+                    'home_bdl_id' => $homeTeamBdlId,
+                    'away_bdl_id' => $awayTeamBdlId,
+                ]);
                 $stats['skipped']++;
                 continue;
             }
 
+            // Parse game date/time
             $gameDate = $gameData['date'] ?? null;
             $scheduledAt = $gameDate ? Carbon::parse($gameDate) : now();
+
+            // Track dates for cache clearing
             $processedDates[$scheduledAt->format('Y-m-d')] = true;
 
+            // Map status
             $status = $this->mapStatus($gameData['status'] ?? 'scheduled');
 
             $gameAttributes = [
@@ -114,6 +123,7 @@ class SyncGames extends Command
                 ],
             ];
 
+            // Find existing game by BallDontLie ID
             $game = Game::where('balldontlie_id', $bdlId)->first();
 
             if ($game) {
@@ -128,19 +138,17 @@ class SyncGames extends Command
         // Clear cache for processed dates
         foreach (array_keys($processedDates) as $date) {
             Cache::forget("games:date:{$date}");
-            $this->line("  Cleared cache for {$date}");
         }
 
-        $this->newLine();
-        $this->info("✓ Games synced: {$stats['created']} created, {$stats['updated']} updated, {$stats['skipped']} skipped");
-        $this->info("Total games processed: {$stats['total']}");
-        $this->info("Total games in database: " . Game::count());
-
-        return Command::SUCCESS;
+        Log::info('SyncGamesFromBallDontLie: Sync completed', $stats);
     }
 
+    /**
+     * Map BallDontLie status to our status values.
+     */
     protected function mapStatus(string $apiStatus): string
     {
+        // BallDontLie uses: "Final", "1st Qtr", "2nd Qtr", "Halftime", "3rd Qtr", "4th Qtr", "In Progress"
         $status = strtolower($apiStatus);
 
         return match (true) {

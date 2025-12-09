@@ -29,6 +29,8 @@ class Team extends Model
         'arena_state',
         'arena_latitude',
         'arena_longitude',
+        'extra_attributes',
+        'balldontlie_id',
     ];
 
     /**
@@ -40,6 +42,7 @@ class Team extends Model
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
         'deleted_at' => 'datetime',
+        'extra_attributes' => 'array',
     ];
 
     /**

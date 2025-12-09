@@ -23,6 +23,8 @@ class Player extends Model
         'average_minutes_played',
         'sportsblaze_player_id',
         'stats_synced_at',
+        'extra_attributes',
+        'balldontlie_id',
     ];
 
     protected $casts = [
@@ -32,6 +34,7 @@ class Player extends Model
         'stats_synced_at' => 'datetime',
         'minutes_played' => 'integer',
         'average_minutes_played' => 'decimal:2',
+        'extra_attributes' => 'array',
     ];
 
     /**

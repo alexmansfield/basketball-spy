@@ -47,4 +47,9 @@ return [
         'key' => env('PERPLEXITY_API_KEY'),
     ],
 
+    'balldontlie' => [
+        'key' => env('BALL_DONT_LIE_API_KEY'),
+        'base_url' => 'https://api.balldontlie.io/v1',
+    ],
+
 ];
