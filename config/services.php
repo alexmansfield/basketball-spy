@@ -35,4 +35,8 @@ return [
         ],
     ],
 
+    'sportsblaze' => [
+        'key' => env('SPORTSBLAZE_API_KEY'),
+    ],
+
 ];

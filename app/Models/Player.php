@@ -19,12 +19,19 @@ class Player extends Model
         'height',
         'weight',
         'headshot_url',
+        'minutes_played',
+        'average_minutes_played',
+        'sportsblaze_player_id',
+        'stats_synced_at',
     ];
 
     protected $casts = [
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
         'deleted_at' => 'datetime',
+        'stats_synced_at' => 'datetime',
+        'minutes_played' => 'integer',
+        'average_minutes_played' => 'decimal:2',
     ];
 
     /**
