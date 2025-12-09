@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Game;
 use App\Models\Team;
 use App\Jobs\SyncGames;
+use App\Services\NBAScheduleService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -69,9 +70,14 @@ class GamesController extends Controller
                 'total_games_in_db' => Game::count(),
             ]);
 
-            // If no games in DB, try fetching from SportsBlaze API
+            // If no games in DB, try fetching from external sources
             if ($games->isEmpty()) {
                 $games = $this->fetchGamesFromApi($date);
+
+                // If SportsBlaze failed or returned no games, try LLM-based fetcher
+                if ($games->isEmpty()) {
+                    $games = $this->fetchGamesFromLLM($date);
+                }
             }
 
             return [
@@ -85,6 +91,8 @@ class GamesController extends Controller
                     'api_error' => request()->attributes->get('api_error'),
                     'api_response' => request()->attributes->get('api_response'),
                     'team_match_error' => request()->attributes->get('team_match_error'),
+                    'llm_response' => request()->attributes->get('llm_response'),
+                    'llm_error' => request()->attributes->get('llm_error'),
                 ],
             ];
         });
@@ -227,6 +235,45 @@ class GamesController extends Controller
             'cancelled', 'canceled' => 'cancelled',
             default => 'scheduled',
         };
+    }
+
+    /**
+     * Fetch games using LLM with web search (fallback when SportsBlaze fails).
+     */
+    protected function fetchGamesFromLLM(string $date): \Illuminate\Database\Eloquent\Collection
+    {
+        $service = app(NBAScheduleService::class);
+
+        try {
+            $gamesData = $service->fetchGamesForDate($date);
+
+            if (empty($gamesData)) {
+                request()->attributes->set('llm_response', ['games_found' => 0]);
+                return Game::query()->where('id', 0)->get();
+            }
+
+            // Store the games
+            $stored = $service->storeGames($gamesData);
+
+            request()->attributes->set('llm_response', [
+                'games_found' => count($gamesData),
+                'games_stored' => $stored,
+            ]);
+
+            // Re-fetch from database with relationships
+            return Game::with(['homeTeam', 'awayTeam'])
+                ->forDate($date)
+                ->orderBy('scheduled_at')
+                ->get();
+
+        } catch (\Exception $e) {
+            Log::error('GamesController: LLM fetch failed', [
+                'error' => $e->getMessage(),
+                'date' => $date,
+            ]);
+            request()->attributes->set('llm_error', $e->getMessage());
+            return Game::query()->where('id', 0)->get();
+        }
     }
 
     /**
