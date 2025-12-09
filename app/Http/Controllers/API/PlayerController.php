@@ -72,7 +72,7 @@ class PlayerController extends Controller
      */
     protected function getPlayersSortedByJersey(?string $teamId, ?string $search)
     {
-        $query = Player::with('team');
+        $query = Player::with('team')->where('is_active', true);
 
         if ($teamId) {
             // Support lookup by numeric ID or team abbreviation
@@ -100,7 +100,7 @@ class PlayerController extends Controller
      */
     protected function getPlayersRankedByMinutes(?string $teamId, ?string $search)
     {
-        $query = Player::with('team');
+        $query = Player::with('team')->where('is_active', true);
 
         if ($teamId) {
             // Support lookup by numeric ID or team abbreviation

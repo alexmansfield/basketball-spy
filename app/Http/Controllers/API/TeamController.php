@@ -84,9 +84,10 @@ class TeamController extends Controller
      */
     public function show(Team $team): JsonResponse
     {
-        // Load players relationship and order by jersey number
+        // Load only active players and order by jersey number
         $team->load(['players' => function ($query) {
-            $query->orderByRaw('CAST(jersey AS UNSIGNED)');
+            $query->where('is_active', true)
+                ->orderByRaw('CAST(jersey AS UNSIGNED)');
         }]);
 
         return response()->json($team);
