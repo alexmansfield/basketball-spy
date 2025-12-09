@@ -84,6 +84,7 @@ class GamesController extends Controller
                     'games_for_date' => $games->count(),
                     'api_error' => request()->attributes->get('api_error'),
                     'api_response' => request()->attributes->get('api_response'),
+                    'team_match_error' => request()->attributes->get('team_match_error'),
                 ],
             ];
         });
@@ -157,21 +158,38 @@ class GamesController extends Controller
         $games = $data['games'] ?? [];
         $teams = Team::all()->keyBy(fn($t) => strtolower($t->abbreviation));
 
+        // Log available teams for debugging
+        Log::info('GamesController: Available teams', [
+            'team_abbrs' => $teams->keys()->toArray(),
+        ]);
+
         foreach ($games as $gameData) {
             $externalId = $gameData['id'] ?? null;
             if (!$externalId) {
                 continue;
             }
 
-            // Find teams by abbreviation
-            $homeAbbr = strtolower($gameData['home']['alias'] ?? $gameData['home']['abbreviation'] ?? '');
-            $awayAbbr = strtolower($gameData['away']['alias'] ?? $gameData['away']['abbreviation'] ?? '');
+            // Log the raw game data structure for debugging
+            Log::info('GamesController: Raw game data', [
+                'game' => $gameData,
+            ]);
+
+            // Find teams by abbreviation - check multiple possible field names
+            $homeAbbr = strtolower($gameData['home']['alias'] ?? $gameData['home']['abbreviation'] ?? $gameData['home_team'] ?? '');
+            $awayAbbr = strtolower($gameData['away']['alias'] ?? $gameData['away']['abbreviation'] ?? $gameData['away_team'] ?? '');
 
             $homeTeam = $teams->get($homeAbbr);
             $awayTeam = $teams->get($awayAbbr);
 
             if (!$homeTeam || !$awayTeam) {
                 Log::warning('GamesController: Could not match teams', [
+                    'home_abbr' => $homeAbbr,
+                    'away_abbr' => $awayAbbr,
+                    'available_teams' => $teams->keys()->take(10)->toArray(),
+                ]);
+
+                // Store for debug output
+                request()->attributes->set('team_match_error', [
                     'home_abbr' => $homeAbbr,
                     'away_abbr' => $awayAbbr,
                 ]);
