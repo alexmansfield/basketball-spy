@@ -4,9 +4,14 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\Game;
+use App\Models\Team;
+use App\Jobs\SyncGames;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class GamesController extends Controller
 {
@@ -19,17 +24,43 @@ class GamesController extends Controller
      * Get today's games.
      *
      * GET /api/games/today
+     *
+     * Fetches games from local DB first, falls back to SportsBlaze API if empty.
      */
     public function today(Request $request): JsonResponse
     {
         $date = now()->toDateString();
-        $cacheKey = "games:today:{$date}";
+        return $this->getGamesForDate($date);
+    }
+
+    /**
+     * Get games for a specific date.
+     *
+     * GET /api/games/{date}
+     */
+    public function byDate(string $date, Request $request): JsonResponse
+    {
+        return $this->getGamesForDate($date);
+    }
+
+    /**
+     * Get games for a date, fetching from SportsBlaze API if DB is empty.
+     */
+    protected function getGamesForDate(string $date): JsonResponse
+    {
+        $cacheKey = "games:date:{$date}";
 
         $data = Cache::remember($cacheKey, self::CACHE_TTL, function () use ($date) {
+            // First, check local database
             $games = Game::with(['homeTeam', 'awayTeam'])
-                ->today()
+                ->forDate($date)
                 ->orderBy('scheduled_at')
                 ->get();
+
+            // If no games in DB, try fetching from SportsBlaze API
+            if ($games->isEmpty()) {
+                $games = $this->fetchGamesFromApi($date);
+            }
 
             return [
                 'games' => $games->map(function ($game) {
@@ -43,29 +74,109 @@ class GamesController extends Controller
     }
 
     /**
-     * Get games for a specific date.
-     *
-     * GET /api/games/{date}
+     * Fetch games from SportsBlaze API and store them.
      */
-    public function byDate(string $date, Request $request): JsonResponse
+    protected function fetchGamesFromApi(string $date): \Illuminate\Database\Eloquent\Collection
     {
-        $cacheKey = "games:date:{$date}";
+        $apiKey = config('services.sportsblaze.key');
 
-        $data = Cache::remember($cacheKey, self::CACHE_TTL, function () use ($date) {
-            $games = Game::with(['homeTeam', 'awayTeam'])
+        if (empty($apiKey)) {
+            Log::warning('GamesController: SPORTSBLAZE_API_KEY not configured, returning empty games');
+            return Game::query()->where('id', 0)->get(); // Empty collection
+        }
+
+        try {
+            $response = Http::timeout(10)->get(
+                "https://api.sportsblaze.com/nba/v1/games/{$date}/schedule.json",
+                ['key' => $apiKey]
+            );
+
+            if (!$response->successful()) {
+                Log::error('GamesController: SportsBlaze API request failed', [
+                    'status' => $response->status(),
+                    'date' => $date,
+                ]);
+                return Game::query()->where('id', 0)->get();
+            }
+
+            $data = $response->json();
+            $this->storeGamesFromApi($data, $date);
+
+            // Re-fetch from database with relationships
+            return Game::with(['homeTeam', 'awayTeam'])
                 ->forDate($date)
                 ->orderBy('scheduled_at')
                 ->get();
 
-            return [
-                'games' => $games->map(function ($game) {
-                    return $this->formatGame($game);
-                })->toArray(),
+        } catch (\Exception $e) {
+            Log::error('GamesController: Exception fetching from SportsBlaze', [
+                'message' => $e->getMessage(),
                 'date' => $date,
-            ];
-        });
+            ]);
+            return Game::query()->where('id', 0)->get();
+        }
+    }
 
-        return response()->json($data);
+    /**
+     * Store games from API response into database.
+     */
+    protected function storeGamesFromApi(array $data, string $date): void
+    {
+        $games = $data['games'] ?? [];
+        $teams = Team::all()->keyBy(fn($t) => strtolower($t->abbreviation));
+
+        foreach ($games as $gameData) {
+            $externalId = $gameData['id'] ?? null;
+            if (!$externalId) {
+                continue;
+            }
+
+            // Find teams by abbreviation
+            $homeAbbr = strtolower($gameData['home']['alias'] ?? $gameData['home']['abbreviation'] ?? '');
+            $awayAbbr = strtolower($gameData['away']['alias'] ?? $gameData['away']['abbreviation'] ?? '');
+
+            $homeTeam = $teams->get($homeAbbr);
+            $awayTeam = $teams->get($awayAbbr);
+
+            if (!$homeTeam || !$awayTeam) {
+                Log::warning('GamesController: Could not match teams', [
+                    'home_abbr' => $homeAbbr,
+                    'away_abbr' => $awayAbbr,
+                ]);
+                continue;
+            }
+
+            // Parse scheduled time
+            $scheduledAt = isset($gameData['scheduled'])
+                ? Carbon::parse($gameData['scheduled'])
+                : Carbon::parse("{$date} " . ($gameData['time'] ?? '19:00:00'));
+
+            Game::updateOrCreate(
+                ['external_id' => $externalId],
+                [
+                    'home_team_id' => $homeTeam->id,
+                    'away_team_id' => $awayTeam->id,
+                    'scheduled_at' => $scheduledAt,
+                    'status' => $this->mapStatus($gameData['status'] ?? 'scheduled'),
+                ]
+            );
+        }
+    }
+
+    /**
+     * Map SportsBlaze status to our status values.
+     */
+    protected function mapStatus(string $apiStatus): string
+    {
+        return match (strtolower($apiStatus)) {
+            'scheduled', 'created' => 'scheduled',
+            'inprogress', 'in_progress', 'live' => 'live',
+            'halftime' => 'halftime',
+            'complete', 'closed', 'final' => 'final',
+            'postponed' => 'postponed',
+            'cancelled', 'canceled' => 'cancelled',
+            default => 'scheduled',
+        };
     }
 
     /**
