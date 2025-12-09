@@ -41,9 +41,14 @@ class SyncGames implements ShouldQueue
         }
 
         try {
-            // SportsBlaze schedule endpoint
+            // SportsBlaze schedule endpoint - format: /nba/v1/games/YYYY/MM/DD/schedule.json
+            $dateObj = Carbon::parse($this->date);
+            $year = $dateObj->format('Y');
+            $month = $dateObj->format('m');
+            $day = $dateObj->format('d');
+
             $response = Http::timeout(30)->get(
-                "https://api.sportsblaze.com/nba/v1/games/{$this->date}/schedule.json",
+                "https://api.sportsblaze.com/nba/v1/games/{$year}/{$month}/{$day}/schedule.json",
                 [
                     'key' => $apiKey,
                 ]

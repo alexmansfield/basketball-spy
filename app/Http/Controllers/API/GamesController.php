@@ -106,7 +106,14 @@ class GamesController extends Controller
         }
 
         try {
-            $url = "https://api.sportsblaze.com/nba/v1/games/{$date}/schedule.json";
+            // SportsBlaze schedule endpoint - try different URL formats
+            // Format: /nba/v1/games/YYYY/MM/DD/schedule.json
+            $dateObj = Carbon::parse($date);
+            $year = $dateObj->format('Y');
+            $month = $dateObj->format('m');
+            $day = $dateObj->format('d');
+
+            $url = "https://api.sportsblaze.com/nba/v1/games/{$year}/{$month}/{$day}/schedule.json";
             Log::info('GamesController: Fetching from SportsBlaze', ['url' => $url]);
 
             $response = Http::timeout(10)->get($url, ['key' => $apiKey]);
