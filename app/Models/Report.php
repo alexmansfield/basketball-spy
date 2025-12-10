@@ -10,40 +10,53 @@ class Report extends Model
 {
     use SoftDeletes;
 
+    /**
+     * The rating sections and their subsections.
+     * This defines the structure for the ratings JSON column.
+     */
+    public const RATING_STRUCTURE = [
+        'offense' => [
+            'shooting' => 'Shooting',
+            'driving' => 'Driving',
+            'dribbling' => 'Dribbling',
+            'creating' => 'Creating',
+            'passing' => 'Passing',
+            'finishing' => 'Finishing',
+        ],
+        'defense' => [
+            'one_on_one' => '1 on 1 Guarding',
+            'blocking' => 'Blocking',
+            'team_defense' => 'Rotating / Positioning',
+            'rebounding' => 'Rebounding',
+        ],
+        'intangibles' => [
+            'effort' => 'Effort',
+            'role_acceptance' => 'Role Acceptance',
+            'iq' => 'I/Q',
+            'awareness' => 'Awareness',
+        ],
+        'athleticism' => [
+            'hands' => 'Hands',
+            'length' => 'Length',
+            'quickness' => 'Quickness',
+            'jumping' => 'Jumping',
+            'strength' => 'Strength',
+            'coordination' => 'Coordination',
+        ],
+    ];
+
     protected $fillable = [
         'player_id',
         'user_id',
         'team_id_at_time',
-        // OFFENSE
-        'offense_shooting',
-        'offense_finishing',
-        'offense_driving',
-        'offense_dribbling',
-        'offense_creating',
-        'offense_passing',
-        // DEFENSE
-        'defense_one_on_one',
-        'defense_blocking',
-        'defense_team_defense',
-        'defense_rebounding',
-        // INTANGIBLES
-        'intangibles_effort',
-        'intangibles_role_acceptance',
-        'intangibles_iq',
-        'intangibles_awareness',
-        // ATHLETICISM
-        'athleticism_hands',
-        'athleticism_length',
-        'athleticism_quickness',
-        'athleticism_jumping',
-        'athleticism_strength',
-        'athleticism_coordination',
-        // ADDITIONAL
+        'game_id',
+        'ratings',
         'notes',
         'synced_at',
     ];
 
     protected $casts = [
+        'ratings' => 'array',
         'synced_at' => 'datetime',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
@@ -75,6 +88,14 @@ class Report extends Model
     }
 
     /**
+     * Get the game this report is associated with.
+     */
+    public function game(): BelongsTo
+    {
+        return $this->belongsTo(Game::class);
+    }
+
+    /**
      * Check if this report has been synced to the server.
      */
     public function isSynced(): bool
@@ -83,33 +104,195 @@ class Report extends Model
     }
 
     /**
-     * Calculate the average rating across all categories.
+     * Get a specific rating value.
+     *
+     * @param string $section e.g., 'offense'
+     * @param string $subsection e.g., 'shooting'
+     * @return int|null
+     */
+    public function getRating(string $section, string $subsection): ?int
+    {
+        return $this->ratings[$section][$subsection]['rating'] ?? null;
+    }
+
+    /**
+     * Get notes for a specific subsection.
+     *
+     * @param string $section e.g., 'offense'
+     * @param string $subsection e.g., 'shooting'
+     * @return string|null
+     */
+    public function getSubsectionNotes(string $section, string $subsection): ?string
+    {
+        return $this->ratings[$section][$subsection]['notes'] ?? null;
+    }
+
+    /**
+     * Set a rating value.
+     *
+     * @param string $section e.g., 'offense'
+     * @param string $subsection e.g., 'shooting'
+     * @param int|null $rating 1-5 or null
+     * @return void
+     */
+    public function setRating(string $section, string $subsection, ?int $rating): void
+    {
+        $ratings = $this->ratings ?? [];
+
+        if (!isset($ratings[$section])) {
+            $ratings[$section] = [];
+        }
+        if (!isset($ratings[$section][$subsection])) {
+            $ratings[$section][$subsection] = ['rating' => null, 'notes' => null];
+        }
+
+        $ratings[$section][$subsection]['rating'] = $rating;
+        $this->ratings = $ratings;
+    }
+
+    /**
+     * Set notes for a specific subsection.
+     *
+     * @param string $section e.g., 'offense'
+     * @param string $subsection e.g., 'shooting'
+     * @param string|null $notes
+     * @return void
+     */
+    public function setSubsectionNotes(string $section, string $subsection, ?string $notes): void
+    {
+        $ratings = $this->ratings ?? [];
+
+        if (!isset($ratings[$section])) {
+            $ratings[$section] = [];
+        }
+        if (!isset($ratings[$section][$subsection])) {
+            $ratings[$section][$subsection] = ['rating' => null, 'notes' => null];
+        }
+
+        $ratings[$section][$subsection]['notes'] = $notes;
+        $this->ratings = $ratings;
+    }
+
+    /**
+     * Get all ratings for a section.
+     *
+     * @param string $section e.g., 'offense'
+     * @return array
+     */
+    public function getSectionRatings(string $section): array
+    {
+        return $this->ratings[$section] ?? [];
+    }
+
+    /**
+     * Calculate the average rating for a specific section.
+     *
+     * @param string $section
+     * @return float|null
+     */
+    public function getSectionAverage(string $section): ?float
+    {
+        $sectionData = $this->ratings[$section] ?? [];
+        $ratings = [];
+
+        foreach ($sectionData as $subsectionData) {
+            if (isset($subsectionData['rating']) && $subsectionData['rating'] !== null) {
+                $ratings[] = $subsectionData['rating'];
+            }
+        }
+
+        return count($ratings) > 0 ? round(array_sum($ratings) / count($ratings), 2) : null;
+    }
+
+    /**
+     * Calculate the overall average rating across all categories.
      */
     public function getAverageRatingAttribute(): ?float
     {
-        $ratings = array_filter([
-            $this->offense_shooting,
-            $this->offense_finishing,
-            $this->offense_driving,
-            $this->offense_dribbling,
-            $this->offense_creating,
-            $this->offense_passing,
-            $this->defense_one_on_one,
-            $this->defense_blocking,
-            $this->defense_team_defense,
-            $this->defense_rebounding,
-            $this->intangibles_effort,
-            $this->intangibles_role_acceptance,
-            $this->intangibles_iq,
-            $this->intangibles_awareness,
-            $this->athleticism_hands,
-            $this->athleticism_length,
-            $this->athleticism_quickness,
-            $this->athleticism_jumping,
-            $this->athleticism_strength,
-            $this->athleticism_coordination,
-        ]);
+        if (!$this->ratings) {
+            return null;
+        }
 
-        return count($ratings) > 0 ? round(array_sum($ratings) / count($ratings), 2) : null;
+        $allRatings = [];
+
+        foreach ($this->ratings as $section => $subsections) {
+            foreach ($subsections as $subsection => $data) {
+                if (isset($data['rating']) && $data['rating'] !== null) {
+                    $allRatings[] = $data['rating'];
+                }
+            }
+        }
+
+        return count($allRatings) > 0 ? round(array_sum($allRatings) / count($allRatings), 2) : null;
+    }
+
+    /**
+     * Get the count of ratings that have been filled in.
+     */
+    public function getRatingsCountAttribute(): int
+    {
+        if (!$this->ratings) {
+            return 0;
+        }
+
+        $count = 0;
+
+        foreach ($this->ratings as $section => $subsections) {
+            foreach ($subsections as $subsection => $data) {
+                if (isset($data['rating']) && $data['rating'] !== null) {
+                    $count++;
+                }
+            }
+        }
+
+        return $count;
+    }
+
+    /**
+     * Get the total possible ratings count.
+     */
+    public function getTotalRatingsAttribute(): int
+    {
+        $total = 0;
+        foreach (self::RATING_STRUCTURE as $subsections) {
+            $total += count($subsections);
+        }
+        return $total;
+    }
+
+    /**
+     * Check if the report is complete (all ratings filled).
+     */
+    public function getIsCompleteAttribute(): bool
+    {
+        return $this->ratings_count === $this->total_ratings;
+    }
+
+    /**
+     * Get completion percentage.
+     */
+    public function getCompletionPercentageAttribute(): int
+    {
+        if ($this->total_ratings === 0) {
+            return 0;
+        }
+        return (int) round(($this->ratings_count / $this->total_ratings) * 100);
+    }
+
+    /**
+     * Initialize empty ratings structure.
+     */
+    public function initializeRatings(): void
+    {
+        $ratings = [];
+
+        foreach (self::RATING_STRUCTURE as $section => $subsections) {
+            $ratings[$section] = [];
+            foreach ($subsections as $key => $label) {
+                $ratings[$section][$key] = ['rating' => null, 'notes' => null];
+            }
+        }
+
+        $this->ratings = $ratings;
     }
 }

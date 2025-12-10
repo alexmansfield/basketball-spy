@@ -37,7 +37,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', [AuthController::class, 'user']);
 
     // Reports (organization-scoped)
+    Route::get('reports/structure', [ReportController::class, 'structure']);
+    Route::get('reports/current', [ReportController::class, 'current']);
     Route::apiResource('reports', ReportController::class);
+    Route::patch('reports/{report}', [ReportController::class, 'patch']);
     Route::post('reports/sync', [ReportController::class, 'sync']);
 
     // Analytics

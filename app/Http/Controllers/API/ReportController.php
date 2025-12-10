@@ -24,12 +24,12 @@ class ReportController extends Controller
     {
         $user = $request->user();
 
-        $query = Report::with(['player.team', 'user:id,name'])
+        $query = Report::with(['player.team', 'user:id,name', 'game'])
             ->where('user_id', $user->id);
 
         // If user is org_admin or super_admin, show all reports in their organization
         if ($user->isOrgAdmin() || $user->isSuperAdmin()) {
-            $query = Report::with(['player.team', 'user:id,name']);
+            $query = Report::with(['player.team', 'user:id,name', 'game']);
 
             if (!$user->isSuperAdmin()) {
                 // Org admins see only their organization's reports
@@ -42,6 +42,11 @@ class ReportController extends Controller
         // Filter by player
         if ($request->has('player_id')) {
             $query->where('player_id', $request->player_id);
+        }
+
+        // Filter by game
+        if ($request->has('game_id')) {
+            $query->where('game_id', $request->game_id);
         }
 
         // Filter by date range
@@ -62,46 +67,96 @@ class ReportController extends Controller
     }
 
     /**
+     * Get rating structure definition.
+     *
+     * GET /api/reports/structure
+     *
+     * Returns the available sections and subsections for ratings.
+     */
+    public function structure(): JsonResponse
+    {
+        return response()->json([
+            'structure' => Report::RATING_STRUCTURE,
+        ]);
+    }
+
+    /**
+     * Get or create a report for a player in a specific game.
+     *
+     * GET /api/reports/current?player_id=1&game_id=1
+     *
+     * This endpoint is used by the mobile app to load existing ratings
+     * when a scout selects a player. Creates a new report if none exists.
+     */
+    public function current(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'player_id' => 'required|exists:players,id',
+            'game_id' => 'nullable|exists:games,id',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['errors' => $validator->errors()], 422);
+        }
+
+        $user = $request->user();
+        $playerId = $request->player_id;
+        $gameId = $request->game_id;
+
+        // Look for existing report by this user for this player in this game
+        $query = Report::where('user_id', $user->id)
+            ->where('player_id', $playerId);
+
+        if ($gameId) {
+            $query->where('game_id', $gameId);
+        } else {
+            $query->whereNull('game_id');
+        }
+
+        $report = $query->first();
+
+        // If no report exists, create one
+        if (!$report) {
+            $player = Player::findOrFail($playerId);
+
+            $report = new Report([
+                'user_id' => $user->id,
+                'player_id' => $playerId,
+                'team_id_at_time' => $player->team_id,
+                'game_id' => $gameId,
+                'notes' => null,
+            ]);
+
+            // Initialize empty ratings structure
+            $report->initializeRatings();
+            $report->save();
+        }
+
+        $report->load(['player.team', 'user:id,name', 'game']);
+
+        // Add computed attributes
+        $report->append(['average_rating', 'ratings_count', 'total_ratings', 'is_complete', 'completion_percentage']);
+
+        return response()->json($report);
+    }
+
+    /**
      * Store a newly created report.
      *
      * POST /api/reports
      *
-     * Creates or updates a report (upsert based on synced_at).
-     * Validates all rating fields (1-5 range).
+     * Creates a new report with the JSON ratings structure.
      */
     public function store(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
             'player_id' => 'required|exists:players,id',
-
-            // Offense ratings (all optional, nullable for partial reports)
-            'offense_shooting' => 'nullable|integer|min:1|max:5',
-            'offense_finishing' => 'nullable|integer|min:1|max:5',
-            'offense_driving' => 'nullable|integer|min:1|max:5',
-            'offense_dribbling' => 'nullable|integer|min:1|max:5',
-            'offense_creating' => 'nullable|integer|min:1|max:5',
-            'offense_passing' => 'nullable|integer|min:1|max:5',
-
-            // Defense ratings
-            'defense_one_on_one' => 'nullable|integer|min:1|max:5',
-            'defense_blocking' => 'nullable|integer|min:1|max:5',
-            'defense_team_defense' => 'nullable|integer|min:1|max:5',
-            'defense_rebounding' => 'nullable|integer|min:1|max:5',
-
-            // Intangibles ratings
-            'intangibles_effort' => 'nullable|integer|min:1|max:5',
-            'intangibles_role_acceptance' => 'nullable|integer|min:1|max:5',
-            'intangibles_iq' => 'nullable|integer|min:1|max:5',
-            'intangibles_awareness' => 'nullable|integer|min:1|max:5',
-
-            // Athleticism ratings
-            'athleticism_hands' => 'nullable|integer|min:1|max:5',
-            'athleticism_length' => 'nullable|integer|min:1|max:5',
-            'athleticism_quickness' => 'nullable|integer|min:1|max:5',
-            'athleticism_jumping' => 'nullable|integer|min:1|max:5',
-            'athleticism_strength' => 'nullable|integer|min:1|max:5',
-            'athleticism_coordination' => 'nullable|integer|min:1|max:5',
-
+            'game_id' => 'nullable|exists:games,id',
+            'ratings' => 'nullable|array',
+            'ratings.*' => 'array',
+            'ratings.*.*' => 'array',
+            'ratings.*.*.rating' => 'nullable|integer|min:1|max:5',
+            'ratings.*.*.notes' => 'nullable|string|max:1000',
             'notes' => 'nullable|string',
         ]);
 
@@ -110,49 +165,26 @@ class ReportController extends Controller
         }
 
         $user = $request->user();
-
-        // Get player to record their team at time of report
         $player = Player::findOrFail($request->player_id);
 
-        // Create report
-        $report = Report::create([
+        $report = new Report([
             'user_id' => $user->id,
             'player_id' => $request->player_id,
             'team_id_at_time' => $player->team_id,
-
-            // Offense
-            'offense_shooting' => $request->offense_shooting,
-            'offense_finishing' => $request->offense_finishing,
-            'offense_driving' => $request->offense_driving,
-            'offense_dribbling' => $request->offense_dribbling,
-            'offense_creating' => $request->offense_creating,
-            'offense_passing' => $request->offense_passing,
-
-            // Defense
-            'defense_one_on_one' => $request->defense_one_on_one,
-            'defense_blocking' => $request->defense_blocking,
-            'defense_team_defense' => $request->defense_team_defense,
-            'defense_rebounding' => $request->defense_rebounding,
-
-            // Intangibles
-            'intangibles_effort' => $request->intangibles_effort,
-            'intangibles_role_acceptance' => $request->intangibles_role_acceptance,
-            'intangibles_iq' => $request->intangibles_iq,
-            'intangibles_awareness' => $request->intangibles_awareness,
-
-            // Athleticism
-            'athleticism_hands' => $request->athleticism_hands,
-            'athleticism_length' => $request->athleticism_length,
-            'athleticism_quickness' => $request->athleticism_quickness,
-            'athleticism_jumping' => $request->athleticism_jumping,
-            'athleticism_strength' => $request->athleticism_strength,
-            'athleticism_coordination' => $request->athleticism_coordination,
-
+            'game_id' => $request->game_id,
+            'ratings' => $request->ratings,
             'notes' => $request->notes,
             'synced_at' => Carbon::now(),
         ]);
 
-        $report->load(['player.team', 'user:id,name']);
+        // Initialize ratings if not provided
+        if (!$report->ratings) {
+            $report->initializeRatings();
+        }
+
+        $report->save();
+        $report->load(['player.team', 'user:id,name', 'game']);
+        $report->append(['average_rating', 'ratings_count', 'total_ratings', 'is_complete', 'completion_percentage']);
 
         return response()->json($report, 201);
     }
@@ -179,15 +211,16 @@ class ReportController extends Controller
             return response()->json(['message' => 'Unauthorized'], 403);
         }
 
-        $report->load(['player.team', 'user:id,name']);
+        $report->load(['player.team', 'user:id,name', 'game']);
+        $report->append(['average_rating', 'ratings_count', 'total_ratings', 'is_complete', 'completion_percentage']);
 
         return response()->json($report);
     }
 
     /**
-     * Update the specified report.
+     * Update the specified report (full update).
      *
-     * PUT/PATCH /api/reports/{id}
+     * PUT /api/reports/{id}
      */
     public function update(Request $request, Report $report): JsonResponse
     {
@@ -199,27 +232,11 @@ class ReportController extends Controller
         }
 
         $validator = Validator::make($request->all(), [
-            // Same validation rules as store
-            'offense_shooting' => 'nullable|integer|min:1|max:5',
-            'offense_finishing' => 'nullable|integer|min:1|max:5',
-            'offense_driving' => 'nullable|integer|min:1|max:5',
-            'offense_dribbling' => 'nullable|integer|min:1|max:5',
-            'offense_creating' => 'nullable|integer|min:1|max:5',
-            'offense_passing' => 'nullable|integer|min:1|max:5',
-            'defense_one_on_one' => 'nullable|integer|min:1|max:5',
-            'defense_blocking' => 'nullable|integer|min:1|max:5',
-            'defense_team_defense' => 'nullable|integer|min:1|max:5',
-            'defense_rebounding' => 'nullable|integer|min:1|max:5',
-            'intangibles_effort' => 'nullable|integer|min:1|max:5',
-            'intangibles_role_acceptance' => 'nullable|integer|min:1|max:5',
-            'intangibles_iq' => 'nullable|integer|min:1|max:5',
-            'intangibles_awareness' => 'nullable|integer|min:1|max:5',
-            'athleticism_hands' => 'nullable|integer|min:1|max:5',
-            'athleticism_length' => 'nullable|integer|min:1|max:5',
-            'athleticism_quickness' => 'nullable|integer|min:1|max:5',
-            'athleticism_jumping' => 'nullable|integer|min:1|max:5',
-            'athleticism_strength' => 'nullable|integer|min:1|max:5',
-            'athleticism_coordination' => 'nullable|integer|min:1|max:5',
+            'ratings' => 'nullable|array',
+            'ratings.*' => 'array',
+            'ratings.*.*' => 'array',
+            'ratings.*.*.rating' => 'nullable|integer|min:1|max:5',
+            'ratings.*.*.notes' => 'nullable|string|max:1000',
             'notes' => 'nullable|string',
         ]);
 
@@ -227,11 +244,96 @@ class ReportController extends Controller
             return response()->json(['errors' => $validator->errors()], 422);
         }
 
-        $report->update($request->all());
+        // Update ratings if provided
+        if ($request->has('ratings')) {
+            $report->ratings = $request->ratings;
+        }
+
+        // Update notes if provided
+        if ($request->has('notes')) {
+            $report->notes = $request->notes;
+        }
+
         $report->synced_at = Carbon::now();
         $report->save();
 
-        $report->load(['player.team', 'user:id,name']);
+        $report->load(['player.team', 'user:id,name', 'game']);
+        $report->append(['average_rating', 'ratings_count', 'total_ratings', 'is_complete', 'completion_percentage']);
+
+        return response()->json($report);
+    }
+
+    /**
+     * Partial update for auto-save functionality.
+     *
+     * PATCH /api/reports/{id}
+     *
+     * Accepts partial updates for individual rating changes.
+     * This is the endpoint used by the mobile app for auto-save.
+     */
+    public function patch(Request $request, Report $report): JsonResponse
+    {
+        $user = $request->user();
+
+        // Only the report creator can update their own report
+        if ($report->user_id !== $user->id) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        $validator = Validator::make($request->all(), [
+            // For updating a single rating
+            'section' => 'nullable|string|in:offense,defense,intangibles,athleticism',
+            'subsection' => 'nullable|string',
+            'rating' => 'nullable|integer|min:1|max:5',
+            'subsection_notes' => 'nullable|string|max:1000',
+
+            // For updating overall notes
+            'notes' => 'nullable|string',
+
+            // For full ratings update
+            'ratings' => 'nullable|array',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['errors' => $validator->errors()], 422);
+        }
+
+        // Handle single rating update
+        if ($request->has('section') && $request->has('subsection')) {
+            $section = $request->section;
+            $subsection = $request->subsection;
+
+            // Validate subsection exists in structure
+            if (!isset(Report::RATING_STRUCTURE[$section][$subsection])) {
+                return response()->json(['error' => 'Invalid subsection'], 422);
+            }
+
+            // Update rating if provided
+            if ($request->has('rating')) {
+                $report->setRating($section, $subsection, $request->rating);
+            }
+
+            // Update subsection notes if provided
+            if ($request->has('subsection_notes')) {
+                $report->setSubsectionNotes($section, $subsection, $request->subsection_notes);
+            }
+        }
+
+        // Handle full ratings update
+        if ($request->has('ratings')) {
+            $report->ratings = $request->ratings;
+        }
+
+        // Handle overall notes update
+        if ($request->has('notes')) {
+            $report->notes = $request->notes;
+        }
+
+        $report->synced_at = Carbon::now();
+        $report->save();
+
+        $report->load(['player.team', 'user:id,name', 'game']);
+        $report->append(['average_rating', 'ratings_count', 'total_ratings', 'is_complete', 'completion_percentage']);
 
         return response()->json($report);
     }
@@ -269,8 +371,10 @@ class ReportController extends Controller
             'reports' => 'required|array',
             'reports.*.id' => 'nullable|exists:reports,id',
             'reports.*.player_id' => 'required|exists:players,id',
+            'reports.*.game_id' => 'nullable|exists:games,id',
+            'reports.*.ratings' => 'nullable|array',
+            'reports.*.notes' => 'nullable|string',
             'reports.*.local_updated_at' => 'required|date',
-            // ... include all rating fields
         ]);
 
         if ($validator->fails()) {
@@ -299,7 +403,8 @@ class ReportController extends Controller
                     }
 
                     // No conflict, update
-                    $existingReport->update($reportData);
+                    $existingReport->ratings = $reportData['ratings'] ?? $existingReport->ratings;
+                    $existingReport->notes = $reportData['notes'] ?? $existingReport->notes;
                     $existingReport->synced_at = Carbon::now();
                     $existingReport->save();
                     $synced[] = $existingReport;
@@ -315,12 +420,21 @@ class ReportController extends Controller
                 // New report from mobile, create it
                 $player = Player::findOrFail($reportData['player_id']);
 
-                $newReport = Report::create(array_merge($reportData, [
+                $newReport = new Report([
                     'user_id' => $user->id,
+                    'player_id' => $reportData['player_id'],
                     'team_id_at_time' => $player->team_id,
+                    'game_id' => $reportData['game_id'] ?? null,
+                    'ratings' => $reportData['ratings'] ?? null,
+                    'notes' => $reportData['notes'] ?? null,
                     'synced_at' => Carbon::now(),
-                ]));
+                ]);
 
+                if (!$newReport->ratings) {
+                    $newReport->initializeRatings();
+                }
+
+                $newReport->save();
                 $synced[] = $newReport;
             }
         }
