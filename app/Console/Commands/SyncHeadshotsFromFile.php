@@ -12,6 +12,18 @@ class SyncHeadshotsFromFile extends Command
 
     protected $description = 'Sync NBA player headshots from local JSON file (matches by name)';
 
+    /**
+     * Manual name mappings for players with different name formats.
+     * Key: database name (normalized), Value: JSON file name (normalized)
+     */
+    protected array $nameAliases = [
+        'nicolas claxton' => 'nic claxton',
+        'garrison mathews' => 'garrison mathews', // Check actual spelling
+        'cameron johnson' => 'cam johnson',
+        'kenneth lofton' => 'kenneth lofton jr',
+        'ej liddell' => 'e.j. liddell',
+    ];
+
     public function handle(): int
     {
         $this->info('Syncing NBA player headshots from JSON file...');
@@ -33,14 +45,23 @@ class SyncHeadshotsFromFile extends Command
 
         $this->info("Loaded " . count($headshots) . " players from JSON file");
 
-        // Build lookup by normalized name
+        // Build lookups by normalized name and by last name for fuzzy matching
         $headshotsByName = [];
+        $headshotsByLastName = [];
         foreach ($headshots as $player) {
             $normalizedName = $this->normalizeName($player['full_name']);
             $headshotsByName[$normalizedName] = [
                 'nba_player_id' => $player['player_id'],
                 'headshot_url' => $player['headshot_url'],
+                'original_name' => $player['full_name'],
             ];
+
+            // Also index by last name for fuzzy matching
+            $lastName = $this->normalizeName($player['last_name']);
+            if (!isset($headshotsByLastName[$lastName])) {
+                $headshotsByLastName[$lastName] = [];
+            }
+            $headshotsByLastName[$lastName][] = $headshotsByName[$normalizedName];
         }
 
         // Get all active players from database
@@ -55,9 +76,43 @@ class SyncHeadshotsFromFile extends Command
 
         foreach ($activePlayers as $player) {
             $normalizedName = $this->normalizeName($player->name);
+            $data = null;
 
+            // Try exact match first
             if (isset($headshotsByName[$normalizedName])) {
                 $data = $headshotsByName[$normalizedName];
+            }
+
+            // Try alias mapping
+            if (!$data && isset($this->nameAliases[$normalizedName])) {
+                $aliasName = $this->normalizeName($this->nameAliases[$normalizedName]);
+                if (isset($headshotsByName[$aliasName])) {
+                    $data = $headshotsByName[$aliasName];
+                }
+            }
+
+            // Try fuzzy match by last name + first initial
+            if (!$data) {
+                $parts = explode(' ', $normalizedName);
+                if (count($parts) >= 2) {
+                    $firstName = $parts[0];
+                    $lastName = end($parts);
+                    $firstInitial = substr($firstName, 0, 1);
+
+                    if (isset($headshotsByLastName[$lastName])) {
+                        foreach ($headshotsByLastName[$lastName] as $candidate) {
+                            $candidateNormalized = $this->normalizeName($candidate['original_name']);
+                            // Check if first initial matches
+                            if (str_starts_with($candidateNormalized, $firstInitial)) {
+                                $data = $candidate;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if ($data) {
                 $player->update([
                     'nba_player_id' => $data['nba_player_id'],
                     'headshot_url' => $data['headshot_url'],
@@ -79,18 +134,16 @@ class SyncHeadshotsFromFile extends Command
         if ($stats['unmatched'] > 0) {
             $this->warn("Unmatched: {$stats['unmatched']} players");
             $this->line("Unmatched players:");
-            foreach (array_slice($unmatched, 0, 20) as $name) {
+            foreach (array_slice($unmatched, 0, 30) as $name) {
                 $this->line("  - {$name}");
             }
-            if (count($unmatched) > 20) {
-                $this->line("  ... and " . (count($unmatched) - 20) . " more");
+            if (count($unmatched) > 30) {
+                $this->line("  ... and " . (count($unmatched) - 30) . " more");
             }
         }
 
         // Clear player cache
         $this->info('Clearing player cache...');
-        $keys = Cache::get('players:*');
-        // Just flush all cache to be safe
         Cache::flush();
         $this->info('Cache cleared');
 
@@ -99,18 +152,63 @@ class SyncHeadshotsFromFile extends Command
 
     /**
      * Normalize a player name for matching.
+     * Handles accented characters, suffixes, and common variations.
      */
     protected function normalizeName(string $name): string
     {
-        $name = strtolower(trim($name));
+        $name = trim($name);
+
+        // Manual transliteration map for common characters
+        $translitMap = [
+            'ć' => 'c', 'Ć' => 'C',
+            'č' => 'c', 'Č' => 'C',
+            'ž' => 'z', 'Ž' => 'Z',
+            'š' => 's', 'Š' => 'S',
+            'đ' => 'd', 'Đ' => 'D',
+            'ñ' => 'n', 'Ñ' => 'N',
+            'ö' => 'o', 'Ö' => 'O',
+            'ü' => 'u', 'Ü' => 'U',
+            'é' => 'e', 'É' => 'E',
+            'è' => 'e', 'È' => 'E',
+            'ê' => 'e', 'Ê' => 'E',
+            'ë' => 'e', 'Ë' => 'E',
+            'à' => 'a', 'À' => 'A',
+            'á' => 'a', 'Á' => 'A',
+            'â' => 'a', 'Â' => 'A',
+            'ä' => 'a', 'Ä' => 'A',
+            'í' => 'i', 'Í' => 'I',
+            'ì' => 'i', 'Ì' => 'I',
+            'î' => 'i', 'Î' => 'I',
+            'ï' => 'i', 'Ï' => 'I',
+            'ó' => 'o', 'Ó' => 'O',
+            'ò' => 'o', 'Ò' => 'O',
+            'ô' => 'o', 'Ô' => 'O',
+            'ú' => 'u', 'Ú' => 'U',
+            'ù' => 'u', 'Ù' => 'U',
+            'û' => 'u', 'Û' => 'U',
+            'ý' => 'y', 'Ý' => 'Y',
+            'ÿ' => 'y', 'Ÿ' => 'Y',
+            ''' => "'", ''' => "'",
+            '–' => '-', '—' => '-',
+        ];
+
+        $name = strtr($name, $translitMap);
+
+        // Lowercase after transliteration
+        $name = strtolower($name);
+
         // Remove suffixes like Jr., Sr., II, III, IV
         $name = preg_replace('/\s+(jr\.?|sr\.?|ii|iii|iv)$/i', '', $name);
+
         // Remove periods
         $name = str_replace('.', '', $name);
+
         // Normalize whitespace
         $name = preg_replace('/\s+/', ' ', $name);
-        // Transliterate accented characters
-        $name = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $name) ?: $name;
+
+        // Remove any remaining non-ASCII characters
+        $name = preg_replace('/[^\x20-\x7E]/', '', $name);
+
         return trim($name);
     }
 }
