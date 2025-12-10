@@ -3743,5 +3743,33 @@
     "first_name": "Hansen",
     "last_name": "Yang",
     "headshot_url": "https://cdn.nba.com/headshots/nba/latest/1040x760/1642286.png"
+  },
+  {
+    "player_id": 1631514,
+    "full_name": "Jamaree Bouyea",
+    "first_name": "Jamaree",
+    "last_name": "Bouyea",
+    "headshot_url": "https://cdn.nba.com/headshots/nba/latest/1040x760/1631514.png"
+  },
+  {
+    "player_id": 1642356,
+    "full_name": "Jahmai Mashack",
+    "first_name": "Jahmai",
+    "last_name": "Mashack",
+    "headshot_url": "https://cdn.nba.com/headshots/nba/latest/1040x760/1642356.png"
+  },
+  {
+    "player_id": 1630576,
+    "full_name": "Ethan Thompson",
+    "first_name": "Ethan",
+    "last_name": "Thompson",
+    "headshot_url": "https://cdn.nba.com/headshots/nba/latest/1040x760/1630576.png"
+  },
+  {
+    "player_id": 1642393,
+    "full_name": "LJ Cryer",
+    "first_name": "LJ",
+    "last_name": "Cryer",
+    "headshot_url": "https://cdn.nba.com/headshots/nba/latest/1040x760/1642393.png"
   }
 ]
