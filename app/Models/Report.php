@@ -104,15 +104,40 @@ class Report extends Model
     }
 
     /**
-     * Get a specific rating value.
+     * Get a specific current rating value.
      *
      * @param string $section e.g., 'offense'
      * @param string $subsection e.g., 'shooting'
      * @return int|null
      */
+    public function getCurrentRating(string $section, string $subsection): ?int
+    {
+        return $this->ratings[$section][$subsection]['current'] ?? null;
+    }
+
+    /**
+     * Get a specific future rating value.
+     *
+     * @param string $section e.g., 'offense'
+     * @param string $subsection e.g., 'shooting'
+     * @return int|null
+     */
+    public function getFutureRating(string $section, string $subsection): ?int
+    {
+        return $this->ratings[$section][$subsection]['future'] ?? null;
+    }
+
+    /**
+     * Get a specific rating value (legacy - returns current rating).
+     *
+     * @param string $section e.g., 'offense'
+     * @param string $subsection e.g., 'shooting'
+     * @return int|null
+     * @deprecated Use getCurrentRating() or getFutureRating()
+     */
     public function getRating(string $section, string $subsection): ?int
     {
-        return $this->ratings[$section][$subsection]['rating'] ?? null;
+        return $this->getCurrentRating($section, $subsection);
     }
 
     /**
@@ -128,14 +153,14 @@ class Report extends Model
     }
 
     /**
-     * Set a rating value.
+     * Set the current rating value.
      *
      * @param string $section e.g., 'offense'
      * @param string $subsection e.g., 'shooting'
      * @param int|null $rating 1-5 or null
      * @return void
      */
-    public function setRating(string $section, string $subsection, ?int $rating): void
+    public function setCurrentRating(string $section, string $subsection, ?int $rating): void
     {
         $ratings = $this->ratings ?? [];
 
@@ -143,11 +168,48 @@ class Report extends Model
             $ratings[$section] = [];
         }
         if (!isset($ratings[$section][$subsection])) {
-            $ratings[$section][$subsection] = ['rating' => null, 'notes' => null];
+            $ratings[$section][$subsection] = ['current' => null, 'future' => null, 'notes' => null];
         }
 
-        $ratings[$section][$subsection]['rating'] = $rating;
+        $ratings[$section][$subsection]['current'] = $rating;
         $this->ratings = $ratings;
+    }
+
+    /**
+     * Set the future rating value.
+     *
+     * @param string $section e.g., 'offense'
+     * @param string $subsection e.g., 'shooting'
+     * @param int|null $rating 1-5 or null
+     * @return void
+     */
+    public function setFutureRating(string $section, string $subsection, ?int $rating): void
+    {
+        $ratings = $this->ratings ?? [];
+
+        if (!isset($ratings[$section])) {
+            $ratings[$section] = [];
+        }
+        if (!isset($ratings[$section][$subsection])) {
+            $ratings[$section][$subsection] = ['current' => null, 'future' => null, 'notes' => null];
+        }
+
+        $ratings[$section][$subsection]['future'] = $rating;
+        $this->ratings = $ratings;
+    }
+
+    /**
+     * Set a rating value (legacy - sets current rating).
+     *
+     * @param string $section e.g., 'offense'
+     * @param string $subsection e.g., 'shooting'
+     * @param int|null $rating 1-5 or null
+     * @return void
+     * @deprecated Use setCurrentRating() or setFutureRating()
+     */
+    public function setRating(string $section, string $subsection, ?int $rating): void
+    {
+        $this->setCurrentRating($section, $subsection, $rating);
     }
 
     /**
@@ -166,7 +228,7 @@ class Report extends Model
             $ratings[$section] = [];
         }
         if (!isset($ratings[$section][$subsection])) {
-            $ratings[$section][$subsection] = ['rating' => null, 'notes' => null];
+            $ratings[$section][$subsection] = ['current' => null, 'future' => null, 'notes' => null];
         }
 
         $ratings[$section][$subsection]['notes'] = $notes;
@@ -185,19 +247,19 @@ class Report extends Model
     }
 
     /**
-     * Calculate the average rating for a specific section.
+     * Calculate the average current rating for a specific section.
      *
      * @param string $section
      * @return float|null
      */
-    public function getSectionAverage(string $section): ?float
+    public function getSectionCurrentAverage(string $section): ?float
     {
         $sectionData = $this->ratings[$section] ?? [];
         $ratings = [];
 
         foreach ($sectionData as $subsectionData) {
-            if (isset($subsectionData['rating']) && $subsectionData['rating'] !== null) {
-                $ratings[] = $subsectionData['rating'];
+            if (isset($subsectionData['current']) && $subsectionData['current'] !== null) {
+                $ratings[] = $subsectionData['current'];
             }
         }
 
@@ -205,9 +267,41 @@ class Report extends Model
     }
 
     /**
-     * Calculate the overall average rating across all categories.
+     * Calculate the average future rating for a specific section.
+     *
+     * @param string $section
+     * @return float|null
      */
-    public function getAverageRatingAttribute(): ?float
+    public function getSectionFutureAverage(string $section): ?float
+    {
+        $sectionData = $this->ratings[$section] ?? [];
+        $ratings = [];
+
+        foreach ($sectionData as $subsectionData) {
+            if (isset($subsectionData['future']) && $subsectionData['future'] !== null) {
+                $ratings[] = $subsectionData['future'];
+            }
+        }
+
+        return count($ratings) > 0 ? round(array_sum($ratings) / count($ratings), 2) : null;
+    }
+
+    /**
+     * Calculate the average rating for a specific section (legacy - uses current).
+     *
+     * @param string $section
+     * @return float|null
+     * @deprecated Use getSectionCurrentAverage() or getSectionFutureAverage()
+     */
+    public function getSectionAverage(string $section): ?float
+    {
+        return $this->getSectionCurrentAverage($section);
+    }
+
+    /**
+     * Calculate the overall average current rating across all categories.
+     */
+    public function getAverageCurrentRatingAttribute(): ?float
     {
         if (!$this->ratings) {
             return null;
@@ -217,8 +311,8 @@ class Report extends Model
 
         foreach ($this->ratings as $section => $subsections) {
             foreach ($subsections as $subsection => $data) {
-                if (isset($data['rating']) && $data['rating'] !== null) {
-                    $allRatings[] = $data['rating'];
+                if (isset($data['current']) && $data['current'] !== null) {
+                    $allRatings[] = $data['current'];
                 }
             }
         }
@@ -227,9 +321,40 @@ class Report extends Model
     }
 
     /**
-     * Get the count of ratings that have been filled in.
+     * Calculate the overall average future rating across all categories.
      */
-    public function getRatingsCountAttribute(): int
+    public function getAverageFutureRatingAttribute(): ?float
+    {
+        if (!$this->ratings) {
+            return null;
+        }
+
+        $allRatings = [];
+
+        foreach ($this->ratings as $section => $subsections) {
+            foreach ($subsections as $subsection => $data) {
+                if (isset($data['future']) && $data['future'] !== null) {
+                    $allRatings[] = $data['future'];
+                }
+            }
+        }
+
+        return count($allRatings) > 0 ? round(array_sum($allRatings) / count($allRatings), 2) : null;
+    }
+
+    /**
+     * Calculate the overall average rating across all categories (legacy - uses current).
+     * @deprecated Use getAverageCurrentRatingAttribute() or getAverageFutureRatingAttribute()
+     */
+    public function getAverageRatingAttribute(): ?float
+    {
+        return $this->average_current_rating;
+    }
+
+    /**
+     * Get the count of current ratings that have been filled in.
+     */
+    public function getCurrentRatingsCountAttribute(): int
     {
         if (!$this->ratings) {
             return 0;
@@ -239,7 +364,7 @@ class Report extends Model
 
         foreach ($this->ratings as $section => $subsections) {
             foreach ($subsections as $subsection => $data) {
-                if (isset($data['rating']) && $data['rating'] !== null) {
+                if (isset($data['current']) && $data['current'] !== null) {
                     $count++;
                 }
             }
@@ -249,7 +374,38 @@ class Report extends Model
     }
 
     /**
-     * Get the total possible ratings count.
+     * Get the count of future ratings that have been filled in.
+     */
+    public function getFutureRatingsCountAttribute(): int
+    {
+        if (!$this->ratings) {
+            return 0;
+        }
+
+        $count = 0;
+
+        foreach ($this->ratings as $section => $subsections) {
+            foreach ($subsections as $subsection => $data) {
+                if (isset($data['future']) && $data['future'] !== null) {
+                    $count++;
+                }
+            }
+        }
+
+        return $count;
+    }
+
+    /**
+     * Get the count of ratings that have been filled in (legacy - uses current).
+     * @deprecated Use getCurrentRatingsCountAttribute() or getFutureRatingsCountAttribute()
+     */
+    public function getRatingsCountAttribute(): int
+    {
+        return $this->current_ratings_count;
+    }
+
+    /**
+     * Get the total possible ratings count (per type - current or future).
      */
     public function getTotalRatingsAttribute(): int
     {
@@ -261,26 +417,46 @@ class Report extends Model
     }
 
     /**
-     * Check if the report is complete (all ratings filled).
+     * Check if the report is complete (all current ratings filled).
      */
     public function getIsCompleteAttribute(): bool
     {
-        return $this->ratings_count === $this->total_ratings;
+        return $this->current_ratings_count === $this->total_ratings;
     }
 
     /**
-     * Get completion percentage.
+     * Get completion percentage for current ratings.
      */
-    public function getCompletionPercentageAttribute(): int
+    public function getCurrentCompletionPercentageAttribute(): int
     {
         if ($this->total_ratings === 0) {
             return 0;
         }
-        return (int) round(($this->ratings_count / $this->total_ratings) * 100);
+        return (int) round(($this->current_ratings_count / $this->total_ratings) * 100);
     }
 
     /**
-     * Initialize empty ratings structure.
+     * Get completion percentage for future ratings.
+     */
+    public function getFutureCompletionPercentageAttribute(): int
+    {
+        if ($this->total_ratings === 0) {
+            return 0;
+        }
+        return (int) round(($this->future_ratings_count / $this->total_ratings) * 100);
+    }
+
+    /**
+     * Get completion percentage (legacy - uses current).
+     * @deprecated Use getCurrentCompletionPercentageAttribute() or getFutureCompletionPercentageAttribute()
+     */
+    public function getCompletionPercentageAttribute(): int
+    {
+        return $this->current_completion_percentage;
+    }
+
+    /**
+     * Initialize empty ratings structure with current/future fields.
      */
     public function initializeRatings(): void
     {
@@ -289,7 +465,7 @@ class Report extends Model
         foreach (self::RATING_STRUCTURE as $section => $subsections) {
             $ratings[$section] = [];
             foreach ($subsections as $key => $label) {
-                $ratings[$section][$key] = ['rating' => null, 'notes' => null];
+                $ratings[$section][$key] = ['current' => null, 'future' => null, 'notes' => null];
             }
         }
 

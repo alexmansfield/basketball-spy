@@ -135,7 +135,12 @@ class ReportController extends Controller
         $report->load(['player.team', 'user:id,name', 'game']);
 
         // Add computed attributes
-        $report->append(['average_rating', 'ratings_count', 'total_ratings', 'is_complete', 'completion_percentage']);
+        $report->append([
+            'average_rating', 'average_current_rating', 'average_future_rating',
+            'ratings_count', 'current_ratings_count', 'future_ratings_count',
+            'total_ratings', 'is_complete',
+            'completion_percentage', 'current_completion_percentage', 'future_completion_percentage',
+        ]);
 
         return response()->json($report);
     }
@@ -155,7 +160,8 @@ class ReportController extends Controller
             'ratings' => 'nullable|array',
             'ratings.*' => 'array',
             'ratings.*.*' => 'array',
-            'ratings.*.*.rating' => 'nullable|integer|min:1|max:5',
+            'ratings.*.*.current' => 'nullable|integer|min:1|max:5',
+            'ratings.*.*.future' => 'nullable|integer|min:1|max:5',
             'ratings.*.*.notes' => 'nullable|string|max:1000',
             'notes' => 'nullable|string',
         ]);
@@ -184,7 +190,12 @@ class ReportController extends Controller
 
         $report->save();
         $report->load(['player.team', 'user:id,name', 'game']);
-        $report->append(['average_rating', 'ratings_count', 'total_ratings', 'is_complete', 'completion_percentage']);
+        $report->append([
+            'average_rating', 'average_current_rating', 'average_future_rating',
+            'ratings_count', 'current_ratings_count', 'future_ratings_count',
+            'total_ratings', 'is_complete',
+            'completion_percentage', 'current_completion_percentage', 'future_completion_percentage',
+        ]);
 
         return response()->json($report, 201);
     }
@@ -212,7 +223,12 @@ class ReportController extends Controller
         }
 
         $report->load(['player.team', 'user:id,name', 'game']);
-        $report->append(['average_rating', 'ratings_count', 'total_ratings', 'is_complete', 'completion_percentage']);
+        $report->append([
+            'average_rating', 'average_current_rating', 'average_future_rating',
+            'ratings_count', 'current_ratings_count', 'future_ratings_count',
+            'total_ratings', 'is_complete',
+            'completion_percentage', 'current_completion_percentage', 'future_completion_percentage',
+        ]);
 
         return response()->json($report);
     }
@@ -235,7 +251,8 @@ class ReportController extends Controller
             'ratings' => 'nullable|array',
             'ratings.*' => 'array',
             'ratings.*.*' => 'array',
-            'ratings.*.*.rating' => 'nullable|integer|min:1|max:5',
+            'ratings.*.*.current' => 'nullable|integer|min:1|max:5',
+            'ratings.*.*.future' => 'nullable|integer|min:1|max:5',
             'ratings.*.*.notes' => 'nullable|string|max:1000',
             'notes' => 'nullable|string',
         ]);
@@ -258,7 +275,12 @@ class ReportController extends Controller
         $report->save();
 
         $report->load(['player.team', 'user:id,name', 'game']);
-        $report->append(['average_rating', 'ratings_count', 'total_ratings', 'is_complete', 'completion_percentage']);
+        $report->append([
+            'average_rating', 'average_current_rating', 'average_future_rating',
+            'ratings_count', 'current_ratings_count', 'future_ratings_count',
+            'total_ratings', 'is_complete',
+            'completion_percentage', 'current_completion_percentage', 'future_completion_percentage',
+        ]);
 
         return response()->json($report);
     }
@@ -284,7 +306,8 @@ class ReportController extends Controller
             // For updating a single rating
             'section' => 'nullable|string|in:offense,defense,intangibles,athleticism',
             'subsection' => 'nullable|string',
-            'rating' => 'nullable|integer|min:1|max:5',
+            'current_rating' => 'nullable|integer|min:1|max:5',
+            'future_rating' => 'nullable|integer|min:1|max:5',
             'subsection_notes' => 'nullable|string|max:1000',
 
             // For updating overall notes
@@ -308,9 +331,14 @@ class ReportController extends Controller
                 return response()->json(['error' => 'Invalid subsection'], 422);
             }
 
-            // Update rating if provided
-            if ($request->has('rating')) {
-                $report->setRating($section, $subsection, $request->rating);
+            // Update current rating if provided
+            if ($request->has('current_rating')) {
+                $report->setCurrentRating($section, $subsection, $request->current_rating);
+            }
+
+            // Update future rating if provided
+            if ($request->has('future_rating')) {
+                $report->setFutureRating($section, $subsection, $request->future_rating);
             }
 
             // Update subsection notes if provided
@@ -333,7 +361,12 @@ class ReportController extends Controller
         $report->save();
 
         $report->load(['player.team', 'user:id,name', 'game']);
-        $report->append(['average_rating', 'ratings_count', 'total_ratings', 'is_complete', 'completion_percentage']);
+        $report->append([
+            'average_rating', 'average_current_rating', 'average_future_rating',
+            'ratings_count', 'current_ratings_count', 'future_ratings_count',
+            'total_ratings', 'is_complete',
+            'completion_percentage', 'current_completion_percentage', 'future_completion_percentage',
+        ]);
 
         return response()->json($report);
     }
