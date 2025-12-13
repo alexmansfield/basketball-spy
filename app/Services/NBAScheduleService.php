@@ -79,25 +79,22 @@ PROMPT;
             'formatted_date' => $formattedDate,
         ]);
 
-        $response = Http::timeout(30)
+        $response = Http::timeout(90)
             ->withHeaders([
                 'Authorization' => "Bearer {$apiKey}",
                 'Content-Type' => 'application/json',
             ])
             ->post('https://api.openai.com/v1/chat/completions', [
-                'model' => 'gpt-4o-mini',
+                'model' => 'gpt-4o-mini-search-preview',
                 'messages' => [
-                    [
-                        'role' => 'system',
-                        'content' => 'You are a helpful assistant that provides NBA game schedules in JSON format only. Never include markdown formatting or explanations.'
-                    ],
                     [
                         'role' => 'user',
                         'content' => $prompt
                     ]
                 ],
-                'temperature' => 0.1,
-                'max_tokens' => 4000,
+                'web_search_options' => [
+                    'search_context_size' => 'medium',
+                ],
             ]);
 
         if (!$response->successful()) {
