@@ -60,26 +60,18 @@ class NBAScheduleService
         // Get team abbreviations from our database for the prompt
         $teamAbbrs = Team::pluck('abbreviation')->implode(', ');
 
-        // Use chat completions API which is reliable
         $prompt = <<<PROMPT
-NBA schedule {$formattedDate}
+List ALL NBA games scheduled for {$formattedDate}.
 
-Return ONLY a JSON array:
+Return a JSON array with EVERY game that day. Example format:
 [
-  {
-    "home_team": "LAL",
-    "away_team": "BOS",
-    "scheduled_time": "7:30 PM",
-    "timezone": "PT",
-    "arena": "Crypto.com Arena"
-  }
+  {"home_team": "LAL", "away_team": "BOS", "scheduled_time": "7:30 PM", "timezone": "PT"},
+  {"home_team": "NYK", "away_team": "MIA", "scheduled_time": "7:00 PM", "timezone": "ET"}
 ]
 
-Valid abbreviations: {$teamAbbrs}
+Valid team abbreviations: {$teamAbbrs}
 
-If unknown or no games: []
-
-Include local timezone (PT, MT, CT, or ET) for each game.
+Return [] if no games or unknown. Include ALL games, typically 5-15 per day during the season.
 PROMPT;
 
         Log::info('NBAScheduleService: Calling OpenAI', [
@@ -105,7 +97,7 @@ PROMPT;
                     ]
                 ],
                 'temperature' => 0.1,
-                'max_tokens' => 2000,
+                'max_tokens' => 4000,
             ]);
 
         if (!$response->successful()) {
