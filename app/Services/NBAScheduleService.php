@@ -17,8 +17,7 @@ class NBAScheduleService
     private const CACHE_TTL = 3600;
 
     /**
-     * Fetch NBA games for a specific date using Perplexity with web search.
-     * Falls back to OpenAI if Perplexity is not configured.
+     * Fetch NBA games for a specific date using OpenAI.
      */
     public function fetchGamesForDate(string $date): array
     {
@@ -31,26 +30,9 @@ class NBAScheduleService
             return $cached;
         }
 
-        // Try Perplexity first (has web search built-in)
-        $perplexityKey = config('services.perplexity.key');
-        if (!empty($perplexityKey)) {
-            try {
-                $games = $this->fetchFromPerplexity($date, $perplexityKey);
-                if (!empty($games)) {
-                    Cache::put($cacheKey, $games, self::CACHE_TTL);
-                    return $games;
-                }
-            } catch (\Exception $e) {
-                Log::warning('NBAScheduleService: Perplexity failed, trying OpenAI', [
-                    'error' => $e->getMessage(),
-                ]);
-            }
-        }
-
-        // Fallback to OpenAI
         $openaiKey = config('services.openai.key');
         if (empty($openaiKey)) {
-            Log::warning('NBAScheduleService: No API keys configured');
+            Log::warning('NBAScheduleService: OPENAI_API_KEY not configured');
             return [];
         }
 
@@ -68,106 +50,7 @@ class NBAScheduleService
     }
 
     /**
-     * Fetch schedule from Perplexity API with built-in web search.
-     * This is the preferred method as it has real-time web access.
-     */
-    protected function fetchFromPerplexity(string $date, string $apiKey): array
-    {
-        $formattedDate = Carbon::parse($date)->format('F j, Y');
-        $dayOfWeek = Carbon::parse($date)->format('l');
-
-        // Get team abbreviations from our database for the prompt
-        $teamAbbrs = Team::pluck('abbreviation')->implode(', ');
-
-        $prompt = <<<PROMPT
-NBA schedule {$formattedDate}
-
-Return ONLY a JSON array of today's NBA games:
-[
-  {
-    "home_team": "LAL",
-    "away_team": "BOS",
-    "scheduled_time": "7:30 PM",
-    "timezone": "PT",
-    "arena": "Crypto.com Arena"
-  }
-]
-
-Valid team abbreviations: {$teamAbbrs}
-
-If no games, return: []
-
-Include the local timezone for each game (PT, MT, CT, or ET).
-PROMPT;
-
-        Log::info('NBAScheduleService: Calling Perplexity', [
-            'date' => $date,
-            'formatted_date' => $formattedDate,
-        ]);
-
-        $response = Http::timeout(60)
-            ->withHeaders([
-                'Authorization' => "Bearer {$apiKey}",
-                'Content-Type' => 'application/json',
-            ])
-            ->post('https://api.perplexity.ai/chat/completions', [
-                'model' => 'sonar',
-                'messages' => [
-                    [
-                        'role' => 'system',
-                        'content' => 'You are a helpful assistant that provides NBA game schedules in JSON format only. Search for the current NBA schedule. Never include markdown formatting or explanations - only return valid JSON.'
-                    ],
-                    [
-                        'role' => 'user',
-                        'content' => $prompt
-                    ]
-                ],
-                'temperature' => 0.1,
-                'max_tokens' => 2000,
-            ]);
-
-        if (!$response->successful()) {
-            Log::error('NBAScheduleService: Perplexity API error', [
-                'status' => $response->status(),
-                'body' => $response->body(),
-            ]);
-            return [];
-        }
-
-        $data = $response->json();
-
-        Log::info('NBAScheduleService: Perplexity response received', [
-            'has_choices' => isset($data['choices']),
-        ]);
-
-        // Extract the text content from the response
-        $content = $this->extractContent($data);
-
-        Log::info('NBAScheduleService: Perplexity content', [
-            'content_length' => strlen($content),
-            'content_preview' => substr($content, 0, 300),
-        ]);
-
-        if (empty($content)) {
-            Log::warning('NBAScheduleService: Empty response from Perplexity');
-            return [];
-        }
-
-        // Parse the JSON response
-        $games = $this->parseGamesJson($content, $date);
-
-        Log::info('NBAScheduleService: Fetched games from Perplexity', [
-            'date' => $date,
-            'games_count' => count($games),
-        ]);
-
-        return $games;
-    }
-
-    /**
      * Fetch schedule from OpenAI using Chat Completions API.
-     * Since we can't do live web search, we rely on the model's knowledge
-     * combined with known NBA schedule patterns.
      */
     protected function fetchFromOpenAI(string $date, string $apiKey): array
     {

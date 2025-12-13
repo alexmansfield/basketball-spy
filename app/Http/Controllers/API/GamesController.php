@@ -22,16 +22,77 @@ class GamesController extends Controller
     private const CACHE_TTL = 300;
 
     /**
-     * Get today's games.
+     * Get today's games (legacy endpoint - redirects to upcoming).
      *
      * GET /api/games/today
-     *
-     * Fetches games from local DB first, falls back to SportsBlaze API if empty.
      */
     public function today(Request $request): JsonResponse
     {
-        $date = now()->toDateString();
-        return $this->getGamesForDate($date);
+        return $this->upcoming($request);
+    }
+
+    /**
+     * Get upcoming games.
+     *
+     * GET /api/games/upcoming
+     *
+     * Returns games that haven't finished yet. If no upcoming games today,
+     * returns tomorrow's games. Sorted by scheduled time.
+     */
+    public function upcoming(Request $request): JsonResponse
+    {
+        $now = now();
+        $today = $now->toDateString();
+        $tomorrow = $now->copy()->addDay()->toDateString();
+
+        // First, try to get today's games that aren't finished
+        $todayGames = Game::with(['homeTeam', 'awayTeam'])
+            ->forDate($today)
+            ->whereNotIn('status', ['final', 'closed', 'cancelled', 'postponed'])
+            ->orderBy('scheduled_at')
+            ->get();
+
+        Log::info('GamesController: Upcoming games query', [
+            'today' => $today,
+            'today_upcoming_count' => $todayGames->count(),
+        ]);
+
+        // If we have upcoming games today, return them
+        if ($todayGames->isNotEmpty()) {
+            return response()->json([
+                'games' => $todayGames->map(fn($game) => $this->formatGame($game))->toArray(),
+                'date' => $today,
+                'showing' => 'today',
+            ]);
+        }
+
+        // No upcoming games today - check if there were any games today at all
+        $todayAllGames = Game::forDate($today)->count();
+
+        // If there were games today (all finished), or no games today, show tomorrow
+        $tomorrowGames = Game::with(['homeTeam', 'awayTeam'])
+            ->forDate($tomorrow)
+            ->orderBy('scheduled_at')
+            ->get();
+
+        Log::info('GamesController: Falling back to tomorrow', [
+            'today_total_games' => $todayAllGames,
+            'tomorrow_games_count' => $tomorrowGames->count(),
+        ]);
+
+        // If no games tomorrow either, try fetching from API for tomorrow
+        if ($tomorrowGames->isEmpty()) {
+            $tomorrowGames = $this->fetchGamesFromApi($tomorrow);
+            if ($tomorrowGames->isEmpty()) {
+                $tomorrowGames = $this->fetchGamesFromLLM($tomorrow);
+            }
+        }
+
+        return response()->json([
+            'games' => $tomorrowGames->map(fn($game) => $this->formatGame($game))->toArray(),
+            'date' => $tomorrow,
+            'showing' => $todayAllGames > 0 ? 'tomorrow_after_today_finished' : 'tomorrow_no_games_today',
+        ]);
     }
 
     /**

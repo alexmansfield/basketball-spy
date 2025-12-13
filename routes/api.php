@@ -25,6 +25,7 @@ Route::post('/register', [AuthController::class, 'register']);
 
 // Public data routes (no auth required for browsing games/teams/players)
 Route::get('/games/today', [GamesController::class, 'today']);
+Route::get('/games/upcoming', [GamesController::class, 'upcoming']);
 Route::get('/games/{date}', [GamesController::class, 'byDate']);
 Route::apiResource('teams', TeamController::class)->only(['index', 'show']);
 Route::apiResource('players', PlayerController::class)->only(['index', 'show']);
