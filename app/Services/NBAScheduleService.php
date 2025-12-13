@@ -62,8 +62,6 @@ class NBAScheduleService
                 'Content-Type' => 'application/json',
             ])
             ->post('https://api.openai.com/v1/responses', [
-                'model' => 'gpt-4o-mini-search-preview',
-                'tools' => [['type' => 'web_search']],
                 'prompt' => [
                     'id' => 'pmpt_69389a8d44cc81938188f27bcdcf0df606e9bff2d576d7ec',
                 ],
