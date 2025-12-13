@@ -54,46 +54,18 @@ class NBAScheduleService
      */
     protected function fetchFromOpenAI(string $date, string $apiKey): array
     {
-        $formattedDate = Carbon::parse($date)->format('F j, Y');
-        $dayOfWeek = Carbon::parse($date)->format('l');
-
-        // Get team abbreviations from our database for the prompt
-        $teamAbbrs = Team::pluck('abbreviation')->implode(', ');
-
-        $prompt = <<<PROMPT
-List ALL NBA games scheduled for {$formattedDate}.
-
-Return a JSON array with EVERY game that day. Example format:
-[
-  {"home_team": "LAL", "away_team": "BOS", "scheduled_time": "7:30 PM", "timezone": "PT"},
-  {"home_team": "NYK", "away_team": "MIA", "scheduled_time": "7:00 PM", "timezone": "ET"}
-]
-
-Valid team abbreviations: {$teamAbbrs}
-
-Return [] if no games or unknown. Include ALL games, typically 5-15 per day during the season.
-PROMPT;
-
-        Log::info('NBAScheduleService: Calling OpenAI', [
-            'date' => $date,
-            'formatted_date' => $formattedDate,
-        ]);
+        Log::info('NBAScheduleService: Calling OpenAI Responses API with saved prompt');
 
         $response = Http::timeout(90)
             ->withHeaders([
                 'Authorization' => "Bearer {$apiKey}",
                 'Content-Type' => 'application/json',
             ])
-            ->post('https://api.openai.com/v1/chat/completions', [
+            ->post('https://api.openai.com/v1/responses', [
                 'model' => 'gpt-4o-mini-search-preview',
-                'messages' => [
-                    [
-                        'role' => 'user',
-                        'content' => $prompt
-                    ]
-                ],
-                'web_search_options' => [
-                    'search_context_size' => 'medium',
+                'tools' => [['type' => 'web_search']],
+                'prompt' => [
+                    'id' => 'pmpt_69389a8d44cc81938188f27bcdcf0df606e9bff2d576d7ec',
                 ],
             ]);
 
@@ -140,61 +112,126 @@ PROMPT;
      */
     protected function extractContent(array $data): string
     {
-        // Chat completions format
+        // Responses API format - look for output_text in output array
+        if (isset($data['output'])) {
+            foreach ($data['output'] as $item) {
+                if (($item['type'] ?? '') === 'message') {
+                    foreach ($item['content'] ?? [] as $content) {
+                        if (($content['type'] ?? '') === 'output_text') {
+                            return $content['text'] ?? '';
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback to chat completions format
         return $data['choices'][0]['message']['content'] ?? '';
     }
 
     /**
-     * Parse the JSON games array from LLM response.
+     * Parse games from LLM response (JSON or markdown fallback).
      */
     protected function parseGamesJson(string $content, string $date): array
     {
-        // Clean up the response - remove markdown code blocks if present
+        $teams = Team::all();
+        $teamsByAbbr = $teams->keyBy(fn($t) => strtoupper($t->abbreviation));
+        $teamsByNickname = $teams->keyBy(fn($t) => strtolower($t->nickname));
+
+        // Try JSON first
         $content = preg_replace('/```json\s*/', '', $content);
         $content = preg_replace('/```\s*/', '', $content);
         $content = trim($content);
 
         $gamesData = json_decode($content, true);
 
-        if (!is_array($gamesData)) {
-            Log::warning('NBAScheduleService: Failed to parse JSON', [
-                'content' => substr($content, 0, 500),
-            ]);
-            return [];
+        // Handle {"games": [...]} wrapper
+        if (is_array($gamesData) && isset($gamesData['games'])) {
+            $gamesData = $gamesData['games'];
         }
 
-        // Transform to our expected format
+        if (is_array($gamesData) && !empty($gamesData)) {
+            return $this->processJsonGames($gamesData, $date, $teamsByAbbr);
+        }
+
+        // Fallback: parse markdown format like "Knicks @ Magic on Dec 13 at 7:30 PM PST"
+        Log::info('NBAScheduleService: Trying markdown fallback parser');
+        return $this->parseMarkdownGames($content, $date, $teamsByNickname, $teamsByAbbr);
+    }
+
+    /**
+     * Process JSON games array.
+     */
+    protected function processJsonGames(array $gamesData, string $date, $teamsByAbbr): array
+    {
         $games = [];
-        $teams = Team::all()->keyBy(fn($t) => strtoupper($t->abbreviation));
 
         foreach ($gamesData as $game) {
-            $homeAbbr = strtoupper($game['home_team'] ?? '');
-            $awayAbbr = strtoupper($game['away_team'] ?? '');
+            // Support both formats: {home_team, away_team} and {home, away}
+            $homeAbbr = strtoupper($game['home_team'] ?? $game['home'] ?? '');
+            $awayAbbr = strtoupper($game['away_team'] ?? $game['away'] ?? '');
 
-            $homeTeam = $teams->get($homeAbbr);
-            $awayTeam = $teams->get($awayAbbr);
+            $homeTeam = $teamsByAbbr->get($homeAbbr);
+            $awayTeam = $teamsByAbbr->get($awayAbbr);
 
             if (!$homeTeam || !$awayTeam) {
-                Log::warning('NBAScheduleService: Unknown team abbreviation', [
-                    'home' => $homeAbbr,
-                    'away' => $awayAbbr,
-                ]);
+                Log::warning('NBAScheduleService: Unknown team', ['home' => $homeAbbr, 'away' => $awayAbbr]);
                 continue;
             }
 
-            // Parse scheduled time with timezone
-            $timezone = $game['timezone'] ?? null;
-            $scheduledAt = $this->parseScheduledTime($date, $game['scheduled_time'] ?? '7:00 PM', $timezone);
+            $timeStr = $game['scheduled_time'] ?? $game['time'] ?? '7:00 PM ET';
+            $scheduledAt = $this->parseScheduledTime($date, $timeStr, null);
 
             $games[] = [
                 'home_team_id' => $homeTeam->id,
                 'away_team_id' => $awayTeam->id,
                 'scheduled_at' => $scheduledAt,
-                'arena' => $game['arena'] ?? $homeTeam->arena_name ?? "{$homeTeam->nickname} Arena",
+                'arena' => $homeTeam->arena_name ?? "{$homeTeam->nickname} Arena",
                 'external_id' => "llm-{$homeAbbr}-{$awayAbbr}-{$date}",
             ];
         }
 
+        return $games;
+    }
+
+    /**
+     * Parse markdown format: "Knicks @ Magic on Dec 13, 2025 at 02:30 PM PST"
+     */
+    protected function parseMarkdownGames(string $content, string $date, $teamsByNickname, $teamsByAbbr): array
+    {
+        $games = [];
+
+        // Match patterns like "Knicks @ Magic" or "NYK @ ORL" with time
+        preg_match_all('/(\w+)\s*@\s*(\w+)[^0-9]*(\d{1,2}:\d{2}\s*(?:AM|PM)\s*(?:PT|PST|PDT|ET|EST|EDT|CT|CST|CDT|MT|MST|MDT)?)/i', $content, $matches, PREG_SET_ORDER);
+
+        foreach ($matches as $match) {
+            $awayName = strtolower($match[1]);
+            $homeName = strtolower($match[2]);
+            $timeStr = $match[3];
+
+            // Try nickname first, then abbreviation
+            $awayTeam = $teamsByNickname->get($awayName) ?? $teamsByAbbr->get(strtoupper($match[1]));
+            $homeTeam = $teamsByNickname->get($homeName) ?? $teamsByAbbr->get(strtoupper($match[2]));
+
+            if (!$homeTeam || !$awayTeam) {
+                Log::debug('NBAScheduleService: Markdown parse - unknown team', ['away' => $awayName, 'home' => $homeName]);
+                continue;
+            }
+
+            $homeAbbr = $homeTeam->abbreviation;
+            $awayAbbr = $awayTeam->abbreviation;
+            $scheduledAt = $this->parseScheduledTime($date, $timeStr, null);
+
+            $games[] = [
+                'home_team_id' => $homeTeam->id,
+                'away_team_id' => $awayTeam->id,
+                'scheduled_at' => $scheduledAt,
+                'arena' => $homeTeam->arena_name ?? "{$homeTeam->nickname} Arena",
+                'external_id' => "llm-{$homeAbbr}-{$awayAbbr}-{$date}",
+            ];
+        }
+
+        Log::info('NBAScheduleService: Markdown parser found games', ['count' => count($games)]);
         return $games;
     }
 
