@@ -7,6 +7,7 @@ use App\Models\Player;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Validator;
 
 class PlayerController extends Controller
 {
@@ -26,6 +27,19 @@ class PlayerController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
+        // Validate query parameters
+        $validator = Validator::make($request->all(), [
+            'team_id' => 'nullable|string|max:50',
+            'search' => 'nullable|string|max:100',
+            'sort' => 'nullable|string|in:jersey,minutes',
+            'per_page' => 'nullable|integer|min:1|max:100',
+            'page' => 'nullable|integer|min:1',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['errors' => $validator->errors()], 422);
+        }
+
         $teamId = $request->input('team_id');
         $search = $request->input('search');
         $sort = $request->input('sort', 'jersey');

@@ -22,6 +22,19 @@ class ReportController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
+        // Validate query parameters
+        $validator = Validator::make($request->all(), [
+            'player_id' => 'nullable|integer|exists:players,id',
+            'game_id' => 'nullable|integer|exists:games,id',
+            'start_date' => 'nullable|date_format:Y-m-d',
+            'end_date' => 'nullable|date_format:Y-m-d|after_or_equal:start_date',
+            'per_page' => 'nullable|integer|min:1|max:100',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['errors' => $validator->errors()], 422);
+        }
+
         $user = $request->user();
 
         $query = Report::with(['player.team', 'user:id,name', 'game'])

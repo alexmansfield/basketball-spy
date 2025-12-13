@@ -19,9 +19,11 @@ use App\Http\Controllers\API\GamesController;
 |
 */
 
-// Public authentication routes
-Route::post('/login', [AuthController::class, 'login']);
-Route::post('/register', [AuthController::class, 'register']);
+// Public authentication routes (rate limited to prevent brute force)
+Route::post('/login', [AuthController::class, 'login'])
+    ->middleware('throttle:5,1'); // 5 attempts per minute
+Route::post('/register', [AuthController::class, 'register'])
+    ->middleware('throttle:3,1'); // 3 registrations per minute
 
 // Public data routes (no auth required for browsing games/teams/players)
 Route::get('/games/today', [GamesController::class, 'today']);

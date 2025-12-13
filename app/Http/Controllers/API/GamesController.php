@@ -167,7 +167,9 @@ class GamesController extends Controller
             $url = "https://api.sportsblaze.com/nba/v1/schedule/daily/{$date}.json";
             Log::info('GamesController: Fetching from SportsBlaze', ['url' => $url]);
 
-            $response = Http::timeout(10)->get($url, ['key' => $apiKey]);
+            $response = Http::timeout(10)
+                ->withHeaders(['X-API-Key' => $apiKey])
+                ->get($url);
 
             if (!$response->successful()) {
                 Log::error('GamesController: SportsBlaze API request failed', [
