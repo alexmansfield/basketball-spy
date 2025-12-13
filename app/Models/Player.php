@@ -11,6 +11,8 @@ class Player extends Model
 {
     use SoftDeletes;
 
+    protected $appends = ['age'];
+
     protected $fillable = [
         'team_id',
         'name',
@@ -18,6 +20,7 @@ class Player extends Model
         'position',
         'height',
         'weight',
+        'birthdate',
         'headshot_url',
         'minutes_played',
         'average_minutes_played',
@@ -33,12 +36,24 @@ class Player extends Model
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
         'deleted_at' => 'datetime',
+        'birthdate' => 'date',
         'stats_synced_at' => 'datetime',
         'minutes_played' => 'integer',
         'average_minutes_played' => 'decimal:2',
         'extra_attributes' => 'array',
         'is_active' => 'boolean',
     ];
+
+    /**
+     * Get player's age in years.
+     */
+    public function getAgeAttribute(): ?int
+    {
+        if (!$this->birthdate) {
+            return null;
+        }
+        return $this->birthdate->age;
+    }
 
     /**
      * Get the team this player belongs to.
