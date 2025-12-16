@@ -37,6 +37,22 @@
         </div>
       </div>
 
+      <!-- Super Admin Actions -->
+      <div v-if="user?.role === 'super_admin'" class="bg-white rounded-xl shadow-sm p-6 mb-8">
+        <h3 class="text-lg font-semibold text-gray-900 mb-4">Admin Tools</h3>
+        <div class="flex flex-wrap gap-3">
+          <button
+            @click="emit('navigate', 'players')"
+            class="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg transition-colors flex items-center space-x-2"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/>
+            </svg>
+            <span>Manage Players</span>
+          </button>
+        </div>
+      </div>
+
       <!-- Stats Grid -->
       <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <div class="bg-white rounded-xl shadow-sm p-6">
@@ -111,7 +127,7 @@ const props = defineProps({
   token: String,
 })
 
-const emit = defineEmits(['logout'])
+const emit = defineEmits(['logout', 'navigate'])
 
 const stats = ref({
   teams: 0,
@@ -141,9 +157,9 @@ async function fetchStats() {
     ])
 
     stats.value = {
-      teams: teamsRes.data?.data?.length || teamsRes.data?.meta?.total || 0,
-      players: playersRes.data?.data?.length || playersRes.data?.meta?.total || 0,
-      reports: reportsRes.data?.data?.length || reportsRes.data?.meta?.total || 0,
+      teams: teamsRes.data?.total || teamsRes.data?.data?.length || 0,
+      players: playersRes.data?.total || playersRes.data?.data?.length || 0,
+      reports: reportsRes.data?.total || reportsRes.data?.data?.length || 0,
     }
   } catch (err) {
     console.error('Failed to fetch stats:', err)

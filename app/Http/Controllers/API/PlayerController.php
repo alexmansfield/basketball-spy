@@ -189,4 +189,115 @@ class PlayerController extends Controller
 
         return response()->json($player);
     }
+
+    /**
+     * Store a newly created player.
+     *
+     * POST /api/admin/players
+     * Requires super_admin role.
+     */
+    public function store(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'team_id' => 'required|exists:teams,id',
+            'name' => 'required|string|max:255',
+            'jersey' => 'nullable|string|max:10',
+            'position' => 'nullable|string|max:50',
+            'height' => 'nullable|string|max:20',
+            'weight' => 'nullable|string|max:20',
+            'headshot_url' => 'nullable|url|max:500',
+            'is_active' => 'boolean',
+        ]);
+
+        $player = Player::create($validated);
+        $player->load('team');
+
+        Cache::flush(); // Clear player caches
+
+        return response()->json($player, 201);
+    }
+
+    /**
+     * Update the specified player.
+     *
+     * PUT /api/admin/players/{player}
+     * Requires super_admin role.
+     */
+    public function update(Request $request, Player $player): JsonResponse
+    {
+        $validated = $request->validate([
+            'team_id' => 'sometimes|exists:teams,id',
+            'name' => 'sometimes|string|max:255',
+            'jersey' => 'nullable|string|max:10',
+            'position' => 'nullable|string|max:50',
+            'height' => 'nullable|string|max:20',
+            'weight' => 'nullable|string|max:20',
+            'headshot_url' => 'nullable|url|max:500',
+            'is_active' => 'boolean',
+        ]);
+
+        $player->update($validated);
+        $player->load('team');
+
+        Cache::flush(); // Clear player caches
+
+        return response()->json($player);
+    }
+
+    /**
+     * Remove the specified player (soft delete).
+     *
+     * DELETE /api/admin/players/{player}
+     * Requires super_admin role.
+     */
+    public function destroy(Player $player): JsonResponse
+    {
+        $player->delete();
+
+        Cache::flush(); // Clear player caches
+
+        return response()->json(['message' => 'Player deleted successfully']);
+    }
+
+    /**
+     * Merge duplicate players.
+     *
+     * POST /api/admin/players/merge
+     * Requires super_admin role.
+     *
+     * Merges source player(s) into target player, moving all reports.
+     */
+    public function merge(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'target_id' => 'required|exists:players,id',
+            'source_ids' => 'required|array|min:1',
+            'source_ids.*' => 'exists:players,id|different:target_id',
+        ]);
+
+        $targetPlayer = Player::findOrFail($validated['target_id']);
+        $sourcePlayers = Player::whereIn('id', $validated['source_ids'])->get();
+
+        $mergedReportsCount = 0;
+
+        foreach ($sourcePlayers as $sourcePlayer) {
+            // Move all reports from source to target
+            $reportsCount = $sourcePlayer->reports()->update(['player_id' => $targetPlayer->id]);
+            $mergedReportsCount += $reportsCount;
+
+            // Soft delete the source player
+            $sourcePlayer->delete();
+        }
+
+        Cache::flush(); // Clear player caches
+
+        $targetPlayer->load('team');
+
+        return response()->json([
+            'message' => 'Players merged successfully',
+            'target' => $targetPlayer,
+            'merged_reports_count' => $mergedReportsCount,
+            'deleted_players_count' => count($validated['source_ids']),
+        ]);
+    }
 }

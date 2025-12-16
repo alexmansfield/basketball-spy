@@ -69,5 +69,9 @@ Route::middleware('auth:sanctum')->group(function () {
                 'output' => Artisan::output(),
             ]);
         });
+
+        // Player CRUD for super admins
+        Route::apiResource('players', PlayerController::class)->only(['store', 'update', 'destroy']);
+        Route::post('players/merge', [PlayerController::class, 'merge']);
     });
 });
