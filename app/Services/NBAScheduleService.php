@@ -18,39 +18,50 @@ class NBAScheduleService
 
     /**
      * Fetch NBA games for a specific date using OpenAI.
+     *
+     * @throws \RuntimeException if API call fails
      */
     public function fetchGamesForDate(string $date): array
     {
         $cacheKey = "nba_schedule_llm:{$date}";
 
-        // Check cache first
+        // Check cache first - but only return if we have actual games
         $cached = Cache::get($cacheKey);
-        if ($cached !== null) {
-            Log::info('NBAScheduleService: Returning cached result', ['date' => $date]);
+        if ($cached !== null && !empty($cached)) {
+            Log::info('NBAScheduleService: Returning cached result', [
+                'date' => $date,
+                'games_count' => count($cached),
+            ]);
             return $cached;
         }
 
         $openaiKey = config('services.openai.key');
         if (empty($openaiKey)) {
-            Log::warning('NBAScheduleService: OPENAI_API_KEY not configured');
-            return [];
+            throw new \RuntimeException('OPENAI_API_KEY not configured');
         }
 
-        try {
-            $games = $this->fetchFromOpenAI($date, $openaiKey);
+        $games = $this->fetchFromOpenAI($date, $openaiKey);
+
+        // Only cache successful results with actual games
+        if (!empty($games)) {
             Cache::put($cacheKey, $games, self::CACHE_TTL);
-            return $games;
-        } catch (\Exception $e) {
-            Log::error('NBAScheduleService: Failed to fetch schedule', [
+            Log::info('NBAScheduleService: Cached successful result', [
                 'date' => $date,
-                'error' => $e->getMessage(),
+                'games_count' => count($games),
             ]);
-            return [];
+        } else {
+            // Clear any stale cache entry
+            Cache::forget($cacheKey);
+            Log::warning('NBAScheduleService: Not caching empty result', ['date' => $date]);
         }
+
+        return $games;
     }
 
     /**
-     * Fetch schedule from OpenAI using Chat Completions API.
+     * Fetch schedule from OpenAI using Responses API.
+     *
+     * @throws \RuntimeException if API call fails
      */
     protected function fetchFromOpenAI(string $date, string $apiKey): array
     {
@@ -70,11 +81,11 @@ class NBAScheduleService
             ]);
 
         if (!$response->successful()) {
-            Log::error('NBAScheduleService: OpenAI API error', [
+            Log::error('NBAScheduleService: OpenAI API error starting background request', [
                 'status' => $response->status(),
                 'body' => $response->body(),
             ]);
-            return [];
+            throw new \RuntimeException("OpenAI API error: {$response->status()} - {$response->body()}");
         }
 
         $data = $response->json();
@@ -87,13 +98,15 @@ class NBAScheduleService
         ]);
 
         if (!$responseId) {
-            Log::error('NBAScheduleService: No response ID returned');
-            return [];
+            Log::error('NBAScheduleService: No response ID returned', ['response' => $data]);
+            throw new \RuntimeException('OpenAI API did not return a response ID');
         }
 
         // Poll for completion (max 5 minutes)
         $maxAttempts = 60;
         $pollInterval = 5; // seconds
+        $consecutiveFailures = 0;
+        $maxConsecutiveFailures = 3;
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             sleep($pollInterval);
@@ -105,45 +118,69 @@ class NBAScheduleService
                 ->get("https://api.openai.com/v1/responses/{$responseId}");
 
             if (!$pollResponse->successful()) {
+                $consecutiveFailures++;
                 Log::warning('NBAScheduleService: Poll request failed', [
                     'attempt' => $attempt,
                     'status' => $pollResponse->status(),
+                    'consecutive_failures' => $consecutiveFailures,
                 ]);
+
+                if ($consecutiveFailures >= $maxConsecutiveFailures) {
+                    throw new \RuntimeException("Polling failed {$consecutiveFailures} times consecutively");
+                }
                 continue;
             }
 
+            $consecutiveFailures = 0; // Reset on success
             $pollData = $pollResponse->json();
             $status = $pollData['status'] ?? 'unknown';
 
-            Log::info('NBAScheduleService: Poll status', [
-                'attempt' => $attempt,
-                'status' => $status,
-            ]);
+            // Only log every 6th attempt (30 seconds) to reduce noise
+            if ($attempt % 6 === 0 || $status !== 'in_progress') {
+                Log::info('NBAScheduleService: Poll status', [
+                    'attempt' => $attempt,
+                    'status' => $status,
+                    'elapsed_seconds' => $attempt * $pollInterval,
+                ]);
+            }
 
             if ($status === 'completed') {
                 $content = $this->extractContent($pollData);
 
-                Log::info('NBAScheduleService: Raw API response', [
+                // Log first 500 chars of content for debugging
+                Log::info('NBAScheduleService: Response completed', [
                     'content_length' => strlen($content),
-                    'content' => $content,
+                    'content_preview' => substr($content, 0, 500),
                 ]);
 
                 if (empty($content)) {
-                    Log::warning('NBAScheduleService: Empty response from OpenAI');
-                    return [];
+                    Log::error('NBAScheduleService: Empty content extracted from completed response');
+                    throw new \RuntimeException('OpenAI returned completed status but content was empty');
                 }
 
                 return $this->parseGamesJson($content, $date);
             }
 
-            if ($status === 'failed' || $status === 'cancelled') {
-                Log::error('NBAScheduleService: Request failed', ['status' => $status]);
-                return [];
+            if ($status === 'failed') {
+                $error = $pollData['error'] ?? $pollData['last_error'] ?? 'Unknown error';
+                Log::error('NBAScheduleService: OpenAI request failed', [
+                    'status' => $status,
+                    'error' => $error,
+                ]);
+                throw new \RuntimeException("OpenAI request failed: " . json_encode($error));
+            }
+
+            if ($status === 'cancelled') {
+                Log::error('NBAScheduleService: OpenAI request was cancelled');
+                throw new \RuntimeException('OpenAI request was cancelled');
             }
         }
 
-        Log::error('NBAScheduleService: Polling timed out after 5 minutes');
-        return [];
+        Log::error('NBAScheduleService: Polling timed out after 5 minutes', [
+            'response_id' => $responseId,
+            'last_status' => $status ?? 'unknown',
+        ]);
+        throw new \RuntimeException('OpenAI polling timed out after 5 minutes');
     }
 
     /**
@@ -154,18 +191,52 @@ class NBAScheduleService
         // Responses API format - look for output_text in output array
         if (isset($data['output'])) {
             foreach ($data['output'] as $item) {
-                if (($item['type'] ?? '') === 'message') {
+                $itemType = $item['type'] ?? 'unknown';
+
+                if ($itemType === 'message') {
                     foreach ($item['content'] ?? [] as $content) {
-                        if (($content['type'] ?? '') === 'output_text') {
-                            return $content['text'] ?? '';
+                        $contentType = $content['type'] ?? 'unknown';
+
+                        if ($contentType === 'output_text') {
+                            $text = $content['text'] ?? '';
+                            Log::info('NBAScheduleService: Extracted content from output_text', [
+                                'length' => strlen($text),
+                            ]);
+                            return $text;
                         }
                     }
+
+                    // Log what content types we found if we didn't find output_text
+                    $contentTypes = array_map(fn($c) => $c['type'] ?? 'unknown', $item['content'] ?? []);
+                    Log::warning('NBAScheduleService: Message found but no output_text', [
+                        'content_types' => $contentTypes,
+                    ]);
                 }
             }
+
+            // Log what output types we found
+            $outputTypes = array_map(fn($o) => $o['type'] ?? 'unknown', $data['output']);
+            Log::warning('NBAScheduleService: Could not extract content from Responses API format', [
+                'output_types' => $outputTypes,
+                'output_count' => count($data['output']),
+            ]);
         }
 
         // Fallback to chat completions format
-        return $data['choices'][0]['message']['content'] ?? '';
+        $fallback = $data['choices'][0]['message']['content'] ?? '';
+        if (!empty($fallback)) {
+            Log::info('NBAScheduleService: Used chat completions fallback', ['length' => strlen($fallback)]);
+            return $fallback;
+        }
+
+        // Log the actual structure we received for debugging
+        Log::error('NBAScheduleService: Could not extract content from response', [
+            'has_output' => isset($data['output']),
+            'has_choices' => isset($data['choices']),
+            'top_level_keys' => array_keys($data),
+        ]);
+
+        return '';
     }
 
     /**
